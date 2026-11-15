@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest an idea for glance
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: glance aims to stay small and fast — browse, quick fixes, print. Ideas that make that flow better are very welcome.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation or problem, rather than the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: How do you do it today?
+      description: Another app, a workaround…

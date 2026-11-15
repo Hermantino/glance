@@ -1,0 +1,52 @@
+name: Release
+
+# Builds a ready-to-run Linux download and attaches it to the GitHub release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build and upload (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    # Built on an older Ubuntu so the binary runs on older glibc versions too.
+    runs-on: ubuntu-22.04
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked
+      - name: Package
+        run: |
+          name="glance-${TAG#v}-x86_64-linux"
+          mkdir -p "$name"
+          cp target/release/glance glance.desktop assets/glance.svg README.md LICENSE-MIT LICENSE-APACHE "$name/"
+          cp assets/Phosphor-LICENSE-MIT.txt "$name/"
+          cat > "$name/install.sh" <<'SH'
+          #!/bin/sh
+          # Installs glance for the current user (~/.local).
+          set -e
+          cd "$(dirname "$0")"
+          install -Dm755 glance "$HOME/.local/bin/glance"
+          install -Dm644 glance.desktop "$HOME/.local/share/applications/glance.desktop"
+          install -Dm644 glance.svg "$HOME/.local/share/icons/hicolor/scalable/apps/glance.svg"
+          echo "Installed. Run 'glance' or open a photo with it from your file manager."
+          SH
+          chmod +x "$name/install.sh"
+          tar czf "$name.tar.gz" "$name"
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" glance-*-x86_64-linux.tar.gz* --clobber

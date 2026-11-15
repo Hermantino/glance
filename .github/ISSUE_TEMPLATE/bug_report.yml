@@ -1,0 +1,57 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to report this! A few details help a lot, especially for printing problems.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a folder with …
+        2. Press …
+        3. …
+  - type: input
+    id: version
+    attributes:
+      label: glance version
+      placeholder: "0.1.0 (or a commit)"
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Distribution and desktop
+      placeholder: "e.g. Arch Linux, Hyprland (Wayland) / Fedora 43, GNOME"
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver
+      placeholder: "e.g. NVIDIA RTX 3080, driver 580 / AMD RX 7800, Mesa 26"
+  - type: input
+    id: printer
+    attributes:
+      label: Printer model and driver (for printing issues)
+      placeholder: "e.g. Epson ET-8500, escpr2 1.2 / HP Envy 4520, hplip"
+  - type: textarea
+    id: photo
+    attributes:
+      label: Photo details (for display or editing issues)
+      description: Camera, file format (JPEG, PNG, RAW type…), and size. Please don't attach private photos.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Terminal output
+      description: Run `glance` from a terminal and paste any messages it prints.
+      render: text
