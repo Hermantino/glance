@@ -128,6 +128,8 @@ A few tests need real photos (JPEG and RAW). Point them at a folder with `GLANCE
 
 Bug reports and pull requests are welcome. For larger changes, please open an issue first. glance aims to stay small and fast.
 
+What's planned, and how to vote for it, is in the [Roadmap & ideas](https://github.com/Hermantino/glance/discussions/9) discussion. Small tasks for newcomers are labelled [good first issue](https://github.com/Hermantino/glance/labels/good%20first%20issue).
+
 ## License
 
 Licensed under either of
