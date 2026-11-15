@@ -7,6 +7,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 - Arch Linux `PKGBUILD` in `packaging/aur/` (package `glance-viewer`).
+- Ready-to-run Linux download attached to each release.
+
+### Fixed
+- The print dialog froze glance for about 2 seconds while CUPS listed printers and their options. Printers are now read in the background at startup and remembered, so the dialog opens instantly.
 
 ## [0.1.0] - 2026-11-15
 

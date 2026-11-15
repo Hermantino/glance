@@ -103,6 +103,10 @@ enum Msg {
     Printed(Result<String, String>),
     PrintProgress(String),
     Ink(String, Vec<(String, i32, [u8; 3])>),
+    /// CUPS destinations and the default one (asked once, in the background).
+    Printers(Vec<String>, Option<String>),
+    /// Options and status of one destination.
+    PrinterOptions(String, Vec<PpdOption>, String),
     Thumb(PathBuf, Result<(RgbaImage, (u32, u32)), String>),
 }
 
@@ -149,6 +153,8 @@ struct EditState {
     orig_tex: TextureHandle,
     /// Showing the original (held \\ key or compare button).
     before: bool,
+    /// Before/after forced on by the demo tour.
+    hold_before: bool,
 }
 
 /// A photo in the print preview: path, edited size in pixels (if known), texture (if loaded).
@@ -164,6 +170,8 @@ struct PrintUi {
     state: String,
     /// None while the printer is being asked.
     ink: Option<Vec<(String, i32, [u8; 3])>>,
+    /// Waiting for CUPS to list printers or this printer's options.
+    loading: bool,
     scale: Scale,
     orient: Orient,
     margin: f32,
@@ -205,6 +213,9 @@ struct App {
     queue: Vec<PathBuf>,
     queue_open: bool,
     thumbs: HashMap<PathBuf, Option<Thumb>>,
+    /// CUPS answers can take a second each, so they're fetched in the background and kept.
+    printers: Option<(Vec<String>, Option<String>)>,
+    printer_options: HashMap<String, (Vec<PpdOption>, String)>,
 }
 
 impl App {
@@ -249,8 +260,30 @@ impl App {
             queue: Vec::new(),
             queue_open: false,
             thumbs: HashMap::new(),
+            printers: None,
+            printer_options: HashMap::new(),
         };
         app.go(idx);
+        // Warm up the printer list and the last printer's options, so Print opens instantly.
+        let (tx, ctx, last) = (
+            app.tx.clone(),
+            app.ctx.clone(),
+            app.config.last_printer.clone(),
+        );
+        std::thread::spawn(move || {
+            let (dests, default) = print::destinations();
+            let first = last
+                .filter(|l| dests.contains(l))
+                .or(default.clone())
+                .or_else(|| dests.first().cloned());
+            let _ = tx.send(Msg::Printers(dests, default));
+            ctx.request_repaint();
+            if let Some(d) = first {
+                let (opts, state) = (print::options(&d), print::state(&d));
+                let _ = tx.send(Msg::PrinterOptions(d, opts, state));
+                ctx.request_repaint();
+            }
+        });
         app
     }
 
@@ -385,6 +418,18 @@ impl App {
                     if let Some(p) = &mut self.printing {
                         p.progress = Some(m);
                     }
+                }
+                Msg::Printers(dests, default) => {
+                    self.printers = Some((dests, default));
+                    self.print_fill_dests();
+                }
+                Msg::PrinterOptions(dest, opts, state) => {
+                    if let Some(pu) = self.printing.as_mut()
+                        && pu.dests.get(pu.dest) == Some(&dest)
+                    {
+                        pu.apply_options(&dest, opts.clone(), state.clone(), &self.config);
+                    }
+                    self.printer_options.insert(dest, (opts, state));
                 }
                 Msg::Ink(dest, levels) => {
                     if let Some(p) = &mut self.printing
@@ -549,6 +594,7 @@ impl App {
             full: (e.full.0 as f32, e.full.1 as f32),
             orig_tex,
             before: false,
+            hold_before: false,
         });
     }
 
@@ -626,22 +672,15 @@ impl App {
         for p in &items {
             self.ensure_thumb(p);
         }
-        let (dests, default) = print::destinations();
-        let dest = self
-            .config
-            .last_printer
-            .as_ref()
-            .and_then(|l| dests.iter().position(|d| d == l))
-            .or_else(|| default.and_then(|d| dests.iter().position(|x| *x == d)))
-            .unwrap_or(0);
-        let mut ui = PrintUi {
+        let ui = PrintUi {
             items,
-            dests,
-            dest,
+            dests: vec![],
+            dest: 0,
             opts: vec![],
             sel: vec![],
             state: String::new(),
             ink: None,
+            loading: true,
             scale: Scale::Fill,
             orient: Orient::Auto,
             margin: 3.0,
@@ -651,8 +690,64 @@ impl App {
             progress: None,
             error: None,
         };
-        ui.load_dest(&self.tx, &self.ctx, &self.config);
         self.printing = Some(ui);
+        self.print_fill_dests();
+    }
+
+    /// Give the open print dialog the printer list, once known, and pick the printer.
+    fn print_fill_dests(&mut self) {
+        let Some((dests, default)) = self.printers.clone() else {
+            return;
+        };
+        let Some(pu) = self.printing.as_mut() else {
+            return;
+        };
+        if !pu.dests.is_empty() {
+            return;
+        }
+        pu.dest = self
+            .config
+            .last_printer
+            .as_ref()
+            .and_then(|l| dests.iter().position(|d| d == l))
+            .or_else(|| default.and_then(|d| dests.iter().position(|x| *x == d)))
+            .unwrap_or(0);
+        pu.dests = dests;
+        if pu.dests.is_empty() {
+            pu.loading = false;
+        }
+        self.print_select_dest();
+    }
+
+    /// Load the chosen printer's options (from the cache when possible) and ink levels.
+    fn print_select_dest(&mut self) {
+        let Some(pu) = self.printing.as_mut() else {
+            return;
+        };
+        let Some(d) = pu.dests.get(pu.dest).cloned() else {
+            return;
+        };
+        pu.ink = None;
+        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        let d2 = d.clone();
+        std::thread::spawn(move || {
+            let levels = print::ink_levels(&d2);
+            let _ = tx.send(Msg::Ink(d2, levels));
+            ctx.request_repaint();
+        });
+        if let Some((opts, state)) = self.printer_options.get(&d).cloned() {
+            pu.apply_options(&d, opts, state, &self.config);
+        } else {
+            pu.loading = true;
+            pu.opts.clear();
+            pu.sel.clear();
+            let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+            std::thread::spawn(move || {
+                let (opts, state) = (print::options(&d), print::state(&d));
+                let _ = tx.send(Msg::PrinterOptions(d, opts, state));
+                ctx.request_repaint();
+            });
+        }
     }
 
     fn develop_raw(&mut self, raw_path: PathBuf) {
@@ -1140,6 +1235,7 @@ impl App {
             .collect();
         let mut close = false;
         let mut submit = false;
+        let mut dest_changed = false;
         egui::Modal::new(egui::Id::unique("print")).show(ctx, |ui| {
             ui.set_width(860.0);
             ui.heading(if items.len() == 1 {
@@ -1189,7 +1285,7 @@ impl App {
                                 });
                             if new_dest != pu.dest {
                                 pu.dest = new_dest;
-                                pu.load_dest(&self.tx, &self.ctx, &self.config);
+                                dest_changed = true;
                             }
                             ui.end_row();
                             ui.label("");
@@ -1348,6 +1444,9 @@ impl App {
         }
         if !close {
             self.printing = Some(pu);
+            if dest_changed {
+                self.print_select_dest();
+            }
         }
     }
 
@@ -1568,7 +1667,11 @@ fn draw_print_preview(ui: &egui::Ui, rect: Rect, pu: &PrintUi, items: &[PreviewI
         painter.text(
             rect.center(),
             Align2::CENTER_CENTER,
-            "Choose a paper size",
+            if pu.loading {
+                "Reading printer options…"
+            } else {
+                "Choose a paper size"
+            },
             FontId::proportional(14.0),
             Color32::GRAY,
         );
@@ -1673,14 +1776,11 @@ fn draw_print_preview(ui: &egui::Ui, rect: Rect, pu: &PrintUi, items: &[PreviewI
 }
 
 impl PrintUi {
-    fn load_dest(&mut self, tx: &mpsc::Sender<Msg>, ctx: &egui::Context, config: &Config) {
-        let Some(d) = self.dests.get(self.dest).cloned() else {
-            return;
-        };
-        self.opts = print::options(&d);
+    fn apply_options(&mut self, dest: &str, opts: Vec<PpdOption>, state: String, config: &Config) {
+        self.opts = opts;
         self.sel = self.opts.iter().map(|o| o.default).collect();
         // Use what was chosen last time with this printer/preset.
-        if let Some(saved) = config.print_options.get(&d) {
+        if let Some(saved) = config.print_options.get(dest) {
             for (o, sel) in self.opts.iter().zip(self.sel.iter_mut()) {
                 if let Some(i) = saved
                     .get(&o.key)
@@ -1690,14 +1790,8 @@ impl PrintUi {
                 }
             }
         }
-        self.state = print::state(&d);
-        self.ink = None;
-        let (tx, ctx) = (tx.clone(), ctx.clone());
-        std::thread::spawn(move || {
-            let levels = print::ink_levels(&d);
-            let _ = tx.send(Msg::Ink(d, levels));
-            ctx.request_repaint();
-        });
+        self.state = state;
+        self.loading = false;
     }
 
     fn page_key(&self) -> Option<&str> {
@@ -1908,7 +2002,7 @@ impl EditState {
         let cmp = ui.add(
             egui::Button::new(format!("{ICON_EYE} Hold to compare")).sense(Sense::click_and_drag()),
         );
-        self.before = cmp.is_pointer_button_down_on();
+        self.before = cmp.is_pointer_button_down_on() || self.hold_before;
         cmp.on_hover_text("Shows the original while held (or hold B)");
         ui.add_space(4.0);
         if ui.button("Reset all").clicked() {
@@ -2318,10 +2412,31 @@ fn resolve_start(start: Option<PathBuf>) -> (PathBuf, Vec<PathBuf>, usize) {
 impl App {
     /// A timed tour of the main features, for recording the README demo.
     fn demo_step(&mut self, ctx: &egui::Context) {
-        const STEPS: &[f32] = &[2.0, 3.2, 4.4, 5.6, 7.8, 8.6, 10.0, 12.6, 13.4, 16.6, 17.6];
+        // (time in seconds, event)
+        const EVENTS: &[f32] = &[
+            2.0, 3.2, 4.4, 5.6, 7.4, 8.0, 9.0, 10.0, 14.6, 15.8, 16.6, 18.2, 21.6, 22.4,
+        ];
         ctx.request_repaint();
-        let (start, i) = self.demo;
-        if i >= STEPS.len() || start.elapsed().as_secs_f32() < STEPS[i] {
+        let t = self.demo.0.elapsed().as_secs_f32();
+        let ease = |a: f32, b: f32| ((t - a) / (b - a)).clamp(0.0, 1.0);
+        // Continuous moves while editing: level the horizon, then brighten.
+        if let Some(st) = self.editing.as_mut() {
+            if (10.4..=12.8).contains(&t) {
+                // Swing the rotation out and back to level, with the alignment grid showing.
+                let k = ease(10.4, 12.4);
+                st.params.angle = (2.0 * (std::f32::consts::PI * k).sin() * 10.0).round() / 10.0;
+                st.drag =
+                    (k < 1.0).then_some((Handle::Rotate, st.crop, Pos2::ZERO, st.params.angle));
+                st.refit(false);
+            }
+            if (12.8..=14.4).contains(&t) {
+                let k = ease(12.8, 14.2);
+                st.params.exposure = (0.45 * k * 20.0).round() / 20.0;
+                st.params.gamma = 1.0 + 0.08 * k;
+            }
+        }
+        let i = self.demo.1;
+        if i >= EVENTS.len() || t < EVENTS[i] {
             return;
         }
         let n = self.files.len().max(1);
@@ -2332,13 +2447,34 @@ impl App {
             4 => self.info_open = false,
             5 => self.toggle_queue(),
             6 => self.start_edit(),
-            7 => self.editing = None,
+            7 => {
+                // Crop to 10x15 (2:3), landscape.
+                if let Some(st) = self.editing.as_mut() {
+                    st.ratio = 3;
+                    st.ratio_portrait = false;
+                    st.crop_auto = true;
+                    st.refit(false);
+                }
+            }
             8 => {
+                if let Some(st) = self.editing.as_mut() {
+                    st.hold_before = true;
+                }
+            }
+            9 => {
+                if let Some(st) = self.editing.as_mut() {
+                    st.hold_before = false;
+                }
+            }
+            10 => {
+                self.commit_edit();
+            }
+            11 => {
                 if let Some(p) = self.current().cloned() {
                     self.open_print(vec![p]);
                 }
             }
-            9 => self.printing = None,
+            12 => self.printing = None,
             _ => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         }
         self.demo.1 += 1;
