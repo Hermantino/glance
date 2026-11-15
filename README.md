@@ -70,6 +70,17 @@ glance does only those three things. It browses a folder instantly, gives you a 
 
 ## Install
 
+### Download (any Linux distribution)
+
+Get `glance-<version>-x86_64-linux.tar.gz` from the [latest release](https://github.com/Hermantino/glance/releases/latest), then:
+
+```sh
+tar xzf glance-*-x86_64-linux.tar.gz
+./glance-*-x86_64-linux/install.sh
+```
+
+This installs glance for your user (`~/.local/bin`, plus the launcher entry and icon).
+
 ### Arch Linux
 
 A `PKGBUILD` is included (package name `glance-viewer`, since `glance` is already taken on the AUR). It builds the latest release and installs the app, launcher entry and icon:
@@ -110,6 +121,8 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 ```
+
+To re-record the README demo, build with `cargo build --release --features demo`: glance then plays a short scripted tour of its features and closes.
 
 A few tests need real photos (JPEG and RAW). Point them at a folder with `GLANCE_TEST_PHOTOS=/path/to/photos cargo test`; without it, those tests are skipped.
 

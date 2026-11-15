@@ -196,6 +196,8 @@ struct App {
     status: Option<(String, Instant)>,
     busy_saving: bool,
     title: String,
+    #[cfg(feature = "demo")]
+    demo: (Instant, usize),
     logo: TextureHandle,
     info_open: bool,
     info_cache: HashMap<PathBuf, Arc<info::Info>>,
@@ -235,6 +237,8 @@ impl App {
             status: None,
             busy_saving: false,
             title: String::new(),
+            #[cfg(feature = "demo")]
+            demo: (Instant::now(), 0),
             logo: cc.egui_ctx.load_texture(
                 "logo",
                 egui::ColorImage::from_rgba_unmultiplied([64, 64], &logo::rgba(64)),
@@ -2310,10 +2314,43 @@ fn resolve_start(start: Option<PathBuf>) -> (PathBuf, Vec<PathBuf>, usize) {
     }
 }
 
+#[cfg(feature = "demo")]
+impl App {
+    /// A timed tour of the main features, for recording the README demo.
+    fn demo_step(&mut self, ctx: &egui::Context) {
+        const STEPS: &[f32] = &[2.0, 3.2, 4.4, 5.6, 7.8, 8.6, 10.0, 12.6, 13.4, 16.6, 17.6];
+        ctx.request_repaint();
+        let (start, i) = self.demo;
+        if i >= STEPS.len() || start.elapsed().as_secs_f32() < STEPS[i] {
+            return;
+        }
+        let n = self.files.len().max(1);
+        match i {
+            0 | 1 => self.go((self.idx + 1) % n),
+            2 => self.go((self.idx + n - 1) % n),
+            3 => self.info_open = true,
+            4 => self.info_open = false,
+            5 => self.toggle_queue(),
+            6 => self.start_edit(),
+            7 => self.editing = None,
+            8 => {
+                if let Some(p) = self.current().cloned() {
+                    self.open_print(vec![p]);
+                }
+            }
+            9 => self.printing = None,
+            _ => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+        }
+        self.demo.1 += 1;
+    }
+}
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.handle_messages();
+        #[cfg(feature = "demo")]
+        self.demo_step(&ctx);
 
         let title = match self.current() {
             Some(p) => format!("{} — glance", files::file_name(p)),

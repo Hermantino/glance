@@ -9,6 +9,10 @@ readme = "README.md"
 keywords = ["photo", "image-viewer", "printing", "egui", "linux"]
 categories = ["multimedia::images", "graphics"]
 
+[features]
+# Plays a scripted tour for recording the README demo (not for normal use).
+demo = []
+
 [dependencies]
 eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "wayland", "x11", "default_fonts"] }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "tiff", "webp", "gif", "bmp", "rayon"] }
