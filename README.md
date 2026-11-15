@@ -45,6 +45,7 @@ glance isn't meant to become yet another image editor or photo library manager. 
 - **Print**: any CUPS printer or saved preset; paper size, feeder, paper type, ink levels, fill or fit, orientation, margins, copies, and a live preview with print size and dpi. The page is composed at the exact paper size and sent as a PDF with no CUPS scaling, so photos are never stretched. Remembers the options last used with each printer.
 - **Print queue**: mark photos with Space while browsing (say, a freshly filled SD card), then print them all at once, one per sheet. Edits are kept per photo.
 - **Details**: a side panel with file size, dimensions, camera, lens, focal length, aperture, shutter speed, ISO, date taken and location, read from EXIF (RAW files included).
+- **Omarchy**: on [Omarchy](https://omarchy.org), glance follows your theme live (accent, background, corner style), like Omarchy's own apps. On other desktops it keeps its own amber look.
 - **RAW**: shows the camera's embedded JPEG preview, and "Develop RAW…" opens the file in an installed RAW developer (darktable, RapidRAW, RawTherapee, ART…). glance does not develop RAW files itself.
 
 | Browse | Edit | Print |

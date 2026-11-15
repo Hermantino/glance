@@ -6,6 +6,7 @@ mod info;
 mod logo;
 mod print;
 mod raw;
+mod theme;
 
 use config::{Config, SaveMode};
 use edit::{EditParams, Geo};
@@ -55,7 +56,6 @@ const ICON_DROP: &str = "\u{E210}";
 const ICON_EYE: &str = "\u{E220}";
 const ICON_UNDO: &str = "\u{E08A}";
 const ICON_REDO: &str = "\u{E08C}";
-const AMBER: Color32 = Color32::from_rgb(230, 180, 80);
 
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
@@ -104,6 +104,8 @@ enum Msg {
     Saved(PathBuf, Result<PathBuf, String>),
     Printed(Result<String, String>),
     PrintProgress(String),
+    /// The Omarchy theme was switched (None: no longer on an Omarchy theme).
+    Theme(Option<theme::Palette>),
     Ink(String, Vec<(String, i32, [u8; 3])>),
     /// CUPS destinations and the default one (asked once, in the background).
     Printers(Vec<String>, Option<String>),
@@ -233,9 +235,8 @@ struct App {
 
 impl App {
     fn new(cc: &eframe::CreationContext<'_>, start: Option<PathBuf>) -> Self {
-        let mut visuals = egui::Visuals::dark();
-        visuals.panel_fill = Color32::from_gray(24);
-        cc.egui_ctx.set_visuals(visuals);
+        // glance's own amber look, or the active Omarchy theme (followed live below).
+        theme::apply(&cc.egui_ctx, theme::read_omarchy());
         install_fonts(&cc.egui_ctx);
 
         let (dir, files, idx) = resolve_start(start);
@@ -277,6 +278,11 @@ impl App {
             printer_options: HashMap::new(),
         };
         app.go(idx);
+        let (tx, ctx) = (app.tx.clone(), app.ctx.clone());
+        theme::watch(move |p| {
+            let _ = tx.send(Msg::Theme(p));
+            ctx.request_repaint();
+        });
         // Warm up the printer list and the last printer's options, so Print opens instantly.
         let (tx, ctx, last) = (
             app.tx.clone(),
@@ -427,6 +433,7 @@ impl App {
                         }
                     }
                 },
+                Msg::Theme(p) => theme::apply(&self.ctx, p),
                 Msg::PrintProgress(m) => {
                     if let Some(p) = &mut self.printing {
                         p.progress = Some(m);
@@ -865,7 +872,7 @@ impl App {
             ui.label(
                 egui::RichText::new("glance")
                     .strong()
-                    .color(Color32::from_rgb(230, 180, 80)),
+                    .color(theme::accent()),
             );
             ui.separator();
             let n = self.files.len();
@@ -879,7 +886,7 @@ impl App {
                 ui.label(egui::RichText::new(files::file_name(&p)).strong());
                 ui.weak(format!("{} / {}", self.idx + 1, n));
                 if self.edits.contains_key(&p) {
-                    ui.colored_label(Color32::from_rgb(230, 180, 80), "● edited");
+                    ui.colored_label(theme::accent(), "● edited");
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -988,7 +995,7 @@ impl App {
                     ui.vertical(|ui| {
                         ui.label(files::file_name(path));
                         if self.edits.contains_key(path) {
-                            ui.colored_label(AMBER, "edited");
+                            ui.colored_label(theme::accent(), "edited");
                         }
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1042,11 +1049,7 @@ impl App {
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (title, rows) in &inf.sections {
                 ui.add_space(8.0);
-                ui.label(
-                    egui::RichText::new(*title)
-                        .strong()
-                        .color(Color32::from_rgb(230, 180, 80)),
-                );
+                ui.label(egui::RichText::new(*title).strong().color(theme::accent()));
                 egui::Grid::new(*title)
                     .num_columns(2)
                     .spacing([10.0, 4.0])
@@ -1087,7 +1090,7 @@ impl App {
     fn view(&mut self, ui: &mut egui::Ui) {
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, Color32::from_gray(16));
+        painter.rect_filled(rect, 0.0, theme::image_bg());
         let Some(path) = self.current().cloned() else {
             painter.text(
                 rect.center(),
@@ -1157,7 +1160,7 @@ impl App {
                         Align2::CENTER_CENTER,
                         format!("{ICON_IN_QUEUE} In print queue"),
                         FontId::proportional(13.0),
-                        AMBER,
+                        theme::accent(),
                     );
                 }
             }
@@ -2141,7 +2144,7 @@ impl EditState {
     fn canvas(&mut self, ui: &mut egui::Ui, thirds: bool) {
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, Color32::from_gray(16));
+        painter.rect_filled(rect, 0.0, theme::image_bg());
         if self.before || ui.input(|i| i.key_down(Key::B)) && !ui.ctx().egui_wants_keyboard_input()
         {
             // The untouched original, for comparison.
@@ -2161,7 +2164,7 @@ impl EditState {
                 Align2::CENTER_CENTER,
                 format!("{ICON_EYE} Before"),
                 FontId::proportional(13.0),
-                AMBER,
+                theme::accent(),
             );
             ui.ctx().request_repaint();
             return;

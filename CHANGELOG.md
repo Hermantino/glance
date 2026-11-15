@@ -6,6 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Added
+- On Omarchy, glance follows the active theme live: accent, background and corner rounding. Elsewhere it keeps its own amber look.
 - Undo and redo in Edit (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y, and buttons). A whole slider or crop drag undoes in one step.
 
 ## [0.1.1] - 2026-11-15
