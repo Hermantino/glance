@@ -1,0 +1,53 @@
+# Maintainer: Hermantino <42477109+Hermantino@users.noreply.github.com>
+pkgname=glance-viewer
+_pkgname=glance
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Fast photo viewer: browse a folder, make quick fixes, print (CUPS)'
+arch=('x86_64' 'aarch64')
+url='https://github.com/Hermantino/glance'
+license=('MIT OR Apache-2.0')
+depends=('cups' 'gcc-libs' 'glibc' 'hicolor-icon-theme' 'libxkbcommon' 'vulkan-icd-loader' 'wayland')
+makedepends=('cargo')
+optdepends=(
+  'perl-image-exiftool: keep camera metadata when saving edited photos'
+  'darktable: develop RAW files'
+  'rawtherapee: develop RAW files'
+  'libglvnd: OpenGL fallback when Vulkan is unavailable'
+  'libx11: X11 session support'
+  'libxcursor: X11 session support'
+  'libxi: X11 session support'
+  'libxkbcommon-x11: X11 session support'
+)
+conflicts=("$_pkgname" 'glance-git')
+source=("$_pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('b59e51d955eaed7a97c501a8e01a433004bee4994cd788c786ecfae3e05e522f')
+
+prepare() {
+  cd "$_pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$_pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+check() {
+  cd "$_pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --frozen --release
+}
+
+package() {
+  cd "$_pkgname-$pkgver"
+  install -Dm755 target/release/$_pkgname "$pkgdir/usr/bin/$_pkgname"
+  install -Dm644 glance.desktop "$pkgdir/usr/share/applications/$_pkgname.desktop"
+  install -Dm644 assets/glance.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/$_pkgname.svg"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE-MIT LICENSE-APACHE -t "$pkgdir/usr/share/licenses/$pkgname/"
+  install -Dm644 assets/Phosphor-LICENSE-MIT.txt "$pkgdir/usr/share/licenses/$pkgname/Phosphor-LICENSE-MIT.txt"
+}

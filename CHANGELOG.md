@@ -3,6 +3,11 @@
 All notable changes to glance are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Arch Linux `PKGBUILD` in `packaging/aur/` (package `glance-viewer`).
+
 ## [0.1.0] - 2026-11-15
 
 First public release.
@@ -15,4 +20,5 @@ First public release.
 - Photo details panel: file facts plus camera, lens, exposure, date and location from EXIF, including RAW files.
 - RAW files show the camera's embedded preview; "Develop RAW…" opens them in an installed RAW developer.
 
+[Unreleased]: https://github.com/Hermantino/glance/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/Hermantino/glance/releases/tag/v0.1.0

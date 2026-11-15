@@ -70,7 +70,19 @@ glance does only those three things. It browses a folder instantly, gives you a 
 
 ## Install
 
-Build from source with a recent stable [Rust toolchain](https://rustup.rs/):
+### Arch Linux
+
+A `PKGBUILD` is included (package name `glance-viewer`, since `glance` is already taken on the AUR). It builds the latest release and installs the app, launcher entry and icon:
+
+```sh
+git clone https://github.com/Hermantino/glance.git
+cd glance/packaging/aur
+makepkg -si
+```
+
+### From source
+
+Build with a recent stable [Rust toolchain](https://rustup.rs/):
 
 ```sh
 git clone https://github.com/Hermantino/glance.git
