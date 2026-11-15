@@ -53,6 +53,8 @@ const ICON_IN_QUEUE: &str = "\u{E184}";
 const ICON_TRASH: &str = "\u{E4A6}";
 const ICON_DROP: &str = "\u{E210}";
 const ICON_EYE: &str = "\u{E220}";
+const ICON_UNDO: &str = "\u{E08A}";
+const ICON_REDO: &str = "\u{E08C}";
 const AMBER: Color32 = Color32::from_rgb(230, 180, 80);
 
 fn install_fonts(ctx: &egui::Context) {
@@ -134,6 +136,16 @@ enum Handle {
     Rotate,
 }
 
+/// Everything undo/redo restores in the editor.
+#[derive(Clone, Copy, PartialEq, Default)]
+struct Snap {
+    params: EditParams,
+    crop: [f32; 4],
+    ratio: usize,
+    ratio_portrait: bool,
+    crop_auto: bool,
+}
+
 struct EditState {
     path: PathBuf,
     params: EditParams,
@@ -155,6 +167,7 @@ struct EditState {
     before: bool,
     /// Before/after forced on by the demo tour.
     hold_before: bool,
+    history: edit::History<Snap>,
 }
 
 /// A photo in the print preview: path, edited size in pixels (if known), texture (if loaded).
@@ -595,7 +608,12 @@ impl App {
             orig_tex,
             before: false,
             hold_before: false,
+            history: edit::History::new(Snap::default()),
         });
+        if let Some(st) = self.editing.as_mut() {
+            // Undo history starts from the state the photo opened with.
+            st.history = edit::History::new(st.snap());
+        }
     }
 
     /// Store the edit session's params for its image.
@@ -1180,6 +1198,18 @@ impl App {
                         action = Some("done");
                     }
                 });
+                // Check redo first: egui also matches Ctrl+Shift+Z as Ctrl+Z.
+                let (redo, undo) = ctx.input_mut(|i| {
+                    let redo = i
+                        .consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::Z)
+                        || i.consume_key(egui::Modifiers::COMMAND, Key::Y);
+                    (redo, i.consume_key(egui::Modifiers::COMMAND, Key::Z))
+                });
+                if redo {
+                    st.redo();
+                } else if undo {
+                    st.undo();
+                }
             }
             let thirds = &mut self.config.thirds;
             egui::Panel::right("tools")
@@ -1194,6 +1224,10 @@ impl App {
                     });
                 });
             egui::CentralPanel::default().show(ui, |ui| st.canvas(ui, *thirds));
+            // A settled change (nothing being dragged) becomes one undo step.
+            if !ctx.input(|i| i.pointer.any_down()) {
+                st.history.record(st.snap());
+            }
             st.refresh_tone(&ctx);
         }
         match action {
@@ -1827,6 +1861,37 @@ impl PrintUi {
 }
 
 impl EditState {
+    fn snap(&self) -> Snap {
+        Snap {
+            params: self.params,
+            crop: self.crop,
+            ratio: self.ratio,
+            ratio_portrait: self.ratio_portrait,
+            crop_auto: self.crop_auto,
+        }
+    }
+
+    fn restore(&mut self, s: Snap) {
+        self.params = s.params;
+        self.crop = s.crop;
+        self.ratio = s.ratio;
+        self.ratio_portrait = s.ratio_portrait;
+        self.crop_auto = s.crop_auto;
+        self.drag = None;
+    }
+
+    fn undo(&mut self) {
+        if let Some(s) = self.history.undo(self.snap()) {
+            self.restore(s);
+        }
+    }
+
+    fn redo(&mut self) {
+        if let Some(s) = self.history.redo(self.snap()) {
+            self.restore(s);
+        }
+    }
+
     fn geo(&self) -> Geo {
         let (cw, ch) = edit::canvas_size(
             self.base.width() as f32,
@@ -1913,6 +1978,29 @@ impl EditState {
 
     fn tools(&mut self, ui: &mut egui::Ui, thirds: &mut bool) -> Option<&'static str> {
         let mut action = None;
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    self.history.can_undo(),
+                    egui::Button::new(format!("{ICON_UNDO} Undo")),
+                )
+                .on_hover_text("Ctrl+Z")
+                .clicked()
+            {
+                self.undo();
+            }
+            if ui
+                .add_enabled(
+                    self.history.can_redo(),
+                    egui::Button::new(format!("{ICON_REDO} Redo")),
+                )
+                .on_hover_text("Ctrl+Shift+Z or Ctrl+Y")
+                .clicked()
+            {
+                self.redo();
+            }
+        });
+        ui.add_space(6.0);
         ui.heading("Crop");
         let old_ratio = (self.ratio, self.ratio_portrait);
         egui::ComboBox::from_id_salt("ratio")
@@ -2505,7 +2593,7 @@ impl eframe::App for App {
                         ui.label(files::file_name(&st.path));
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.weak("Hold B to compare with the original · Enter done · Esc cancel");
+                        ui.weak("Ctrl+Z undo · Hold B to compare · Enter done · Esc cancel");
                     });
                 });
             });

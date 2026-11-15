@@ -246,3 +246,95 @@ fn bilinear(img: &RgbaImage, x: f32, y: f32) -> [u8; 4] {
     }
     o
 }
+
+/// Undo/redo history of snapshots. `record` is called with the current state
+/// whenever nothing is being dragged; a change since the last recorded state
+/// becomes one undo step, so a whole slider or crop drag undoes in one go.
+pub struct History<T: Copy + PartialEq> {
+    past: Vec<T>,
+    future: Vec<T>,
+    last: T,
+}
+
+impl<T: Copy + PartialEq> History<T> {
+    const LIMIT: usize = 200;
+
+    pub fn new(initial: T) -> Self {
+        Self {
+            past: Vec::new(),
+            future: Vec::new(),
+            last: initial,
+        }
+    }
+
+    /// Note the settled state; returns true if it became a new undo step.
+    pub fn record(&mut self, now: T) -> bool {
+        if now == self.last {
+            return false;
+        }
+        self.past.push(self.last);
+        if self.past.len() > Self::LIMIT {
+            self.past.remove(0);
+        }
+        self.future.clear();
+        self.last = now;
+        true
+    }
+
+    /// The state to go back to, if any. `now` is the current state.
+    pub fn undo(&mut self, now: T) -> Option<T> {
+        self.record(now);
+        let prev = self.past.pop()?;
+        self.future.push(self.last);
+        self.last = prev;
+        Some(prev)
+    }
+
+    pub fn redo(&mut self, now: T) -> Option<T> {
+        self.record(now);
+        let next = self.future.pop()?;
+        self.past.push(self.last);
+        self.last = next;
+        Some(next)
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.past.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.future.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::History;
+
+    #[test]
+    fn undo_redo_steps() {
+        let mut h = History::new(0);
+        assert!(!h.can_undo());
+        h.record(0); // unchanged: no step
+        assert!(!h.can_undo());
+        h.record(5);
+        h.record(7);
+        assert_eq!(h.undo(7), Some(5));
+        assert_eq!(h.undo(5), Some(0));
+        assert_eq!(h.undo(0), None);
+        assert_eq!(h.redo(0), Some(5));
+        assert_eq!(h.redo(5), Some(7));
+        assert_eq!(h.redo(7), None);
+    }
+
+    #[test]
+    fn unrecorded_change_is_undoable_and_new_change_clears_redo() {
+        let mut h = History::new(1);
+        // A change made since the last record (e.g. a button click) is undone too.
+        assert_eq!(h.undo(2), Some(1));
+        assert!(h.can_redo());
+        h.record(3); // a new edit after undo drops the redo branch
+        assert!(!h.can_redo());
+        assert_eq!(h.undo(3), Some(1));
+    }
+}
