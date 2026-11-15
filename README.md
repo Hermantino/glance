@@ -40,7 +40,7 @@ glance isn't meant to become yet another image editor or photo library manager. 
 
 ## Features
 
-- **Browse**: open a photo, a folder, or nothing (the current folder); ←/→ go through every photo in the folder. Neighbouring photos are preloaded, so stepping through is instant. Wheel zoom, drag to pan, double-click for 1:1, fullscreen. Zooming in loads the full-resolution photo on demand, so you can check focus at true 100%.
+- **Browse**: open a photo, a folder, or nothing (the current folder); ←/→ go through every photo in the folder. Neighbouring photos are preloaded, so stepping through is instant. Wheel zoom, drag to pan, double-click for 1:1, fullscreen. Zooming in loads the full-resolution photo on demand, so you can check focus at true 100%; the status bar shows the zoom level and whether you're seeing full resolution.
 - **Formats**: JPEG, PNG, TIFF, WebP, GIF, BMP, HEIC/HEIF/AVIF (including Fujifilm `.HIF`, via the system's libheif), and RAW files through their embedded preview.
 - **Edit**: crop with ratio presets (2:3 for 10×15 cm / 4×6″, 5:7, 4:5, A4, square…), free rotation in 0.1° steps (slider, or drag a knob next to a corner) plus 90° turns, rule-of-thirds guides, exposure and gamma. Undo and redo with Ctrl+Z / Ctrl+Shift+Z. Hold B to compare with the original. Edits are non-destructive until saved; saving makes a copy by default (overwrite, or overwrite with a backup, in Preferences).
 - **Print**: any CUPS printer or saved preset; paper size, feeder, paper type, ink levels, fill or fit, orientation, margins, copies, and a live preview with print size and dpi. The page is composed at the exact paper size and sent as a PDF with no CUPS scaling, so photos are never stretched. Remembers the options last used with each printer.

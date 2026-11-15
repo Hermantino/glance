@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Added
 - HEIC / HEIF / AVIF photos, including Fujifilm `.HIF`, decoded with the system's libheif when it's installed. Edits to them are saved as a JPEG copy.
 - Full-resolution zoom: zooming in past the display copy loads the photo at full size in the background (e.g. 7728 px for a 40 MP Fujifilm photo, instead of 3840 px).
+- Zoom readout: the status bar shows the zoom as a percentage of the photo's real size (100% = one photo pixel per screen pixel), and a label over the photo shows it while zooming, with "loading full resolution…" and "✓ full resolution" as the full-size photo arrives.
 - On Omarchy, glance follows the active theme live: accent, background and corner rounding. Elsewhere it keeps its own amber look.
 - Undo and redo in Edit (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y, and buttons). A whole slider or crop drag undoes in one step.
 

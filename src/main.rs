@@ -232,6 +232,11 @@ struct App {
     /// Full-resolution texture of the current photo, loaded only when zoomed in
     /// past the display copy: (photo, None while loading).
     fullres: Option<(PathBuf, Option<TextureHandle>)>,
+    /// When the zoom last changed, and when the full-resolution photo arrived (for the zoom label).
+    zoom_changed: Option<Instant>,
+    full_arrived: Option<Instant>,
+    /// Zoom readout for the status bar, e.g. "Fit · 17%".
+    zoom_text: String,
     thumbs: HashMap<PathBuf, Option<Thumb>>,
     /// CUPS answers can take a second each, so they're fetched in the background and kept.
     printers: Option<(Vec<String>, Option<String>)>,
@@ -279,6 +284,9 @@ impl App {
             queue: Vec::new(),
             queue_open: false,
             fullres: None,
+            zoom_changed: None,
+            full_arrived: None,
+            zoom_text: String::new(),
             thumbs: HashMap::new(),
             printers: None,
             printer_options: HashMap::new(),
@@ -448,6 +456,9 @@ impl App {
                     // Keep it only if we're still on that photo.
                     if self.fullres.as_ref().map(|f| &f.0) == Some(&path) {
                         self.fullres = res.ok().map(|t| (path, Some(t)));
+                        if self.fullres.is_some() {
+                            self.full_arrived = Some(Instant::now());
+                        }
                     }
                 }
                 Msg::PrintProgress(m) => {
@@ -868,6 +879,7 @@ impl App {
         }
         if zero {
             self.zoom = 1.0;
+            self.zoom_changed = Some(Instant::now());
             self.pan = Vec2::ZERO;
         }
         if q {
@@ -1088,6 +1100,9 @@ impl App {
         ui.horizontal(|ui| {
             if let Some(e) = self.current_entry() {
                 ui.weak(format!("{} × {} px · {}", e.full.0, e.full.1, info::human_size(e.file_size)));
+                if !self.zoom_text.is_empty() {
+                    ui.weak(format!("· {}", self.zoom_text));
+                }
             }
             ui.weak(format!("· {}", files::display_path(&self.dir)));
             if let Some((s, t)) = &self.status
@@ -1132,6 +1147,7 @@ impl App {
                     if scroll != 0.0 {
                         let old = self.zoom;
                         self.zoom = (self.zoom * (scroll * 0.003).exp()).clamp(0.2, 40.0);
+                        self.zoom_changed = Some(Instant::now());
                         if let Some(ptr) = resp.hover_pos() {
                             let rel = ptr - rect.center() - self.pan;
                             self.pan += rel - rel * (self.zoom / old);
@@ -1156,6 +1172,7 @@ impl App {
                         self.zoom = 1.0;
                         self.pan = Vec2::ZERO;
                     }
+                    self.zoom_changed = Some(Instant::now());
                 }
                 let img_rect =
                     Rect::from_center_size(rect.center() + self.pan, size * fit * self.zoom);
@@ -1195,19 +1212,71 @@ impl App {
                     Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
                     Color32::WHITE,
                 );
-                if loading_full {
+                // Zoom readout: 100% = one photo pixel per screen pixel.
+                let photo_w = if edited {
+                    self.edits
+                        .get(&path)
+                        .map(|p| p.output_size(e.full.0 as f32, e.full.1 as f32).0)
+                        .unwrap_or(e.full.0 as f32)
+                } else {
+                    e.full.0 as f32
+                };
+                let pct = img_rect.width() * ppp / photo_w * 100.0;
+                let tex_w = tex.size_vec2().x;
+                let full_detail = tex_w >= photo_w * 0.99;
+                // Zoomed further than the shown image has pixels for.
+                let preview_only = !full_detail && img_rect.width() * ppp > tex_w * 1.05;
+                let fit = (self.zoom - 1.0).abs() < 0.01;
+                let using_full = full_detail && e.full.0 > e.img.width();
+                self.zoom_text = if fit {
+                    format!("Fit · {pct:.0}%")
+                } else if using_full {
+                    format!("{pct:.0}% · full resolution")
+                } else if preview_only {
+                    format!("{pct:.0}% · preview")
+                } else {
+                    format!("{pct:.0}%")
+                };
+                let since =
+                    |t: Option<Instant>| t.map(|t| t.elapsed().as_secs_f32()).unwrap_or(f32::MAX);
+                let arrived = since(self.full_arrived) < 2.0 && full_detail;
+                let label: Option<(String, Color32)> = if loading_full {
+                    Some((
+                        format!("{pct:.0}% · loading full resolution…"),
+                        Color32::LIGHT_GRAY,
+                    ))
+                } else if arrived {
+                    Some((
+                        format!("{pct:.0}% · {ICON_CHECK} full resolution"),
+                        theme::accent(),
+                    ))
+                } else if since(self.zoom_changed) < 1.5 {
+                    let extra = if preview_only { " · preview" } else { "" };
+                    Some((format!("{pct:.0}%{extra}"), Color32::WHITE))
+                } else {
+                    None
+                };
+                if let Some((text, color)) = label {
+                    // Fade out over the last half second.
+                    let t = if loading_full {
+                        0.0
+                    } else {
+                        since(self.zoom_changed).min(since(self.full_arrived))
+                    };
+                    let limit = if arrived { 2.0 } else { 1.5 };
+                    let alpha = ((limit - t) / 0.5).clamp(0.0, 1.0);
+                    let galley = painter.layout_no_wrap(
+                        text,
+                        FontId::proportional(13.0),
+                        color.gamma_multiply(alpha),
+                    );
                     let r = Rect::from_min_size(
                         rect.left_bottom() + Vec2::new(12.0, -38.0),
-                        Vec2::new(200.0, 26.0),
+                        Vec2::new(galley.size().x + 24.0, 26.0),
                     );
-                    painter.rect_filled(r, 13.0, Color32::from_black_alpha(180));
-                    painter.text(
-                        r.center(),
-                        Align2::CENTER_CENTER,
-                        "Loading full resolution…",
-                        FontId::proportional(13.0),
-                        Color32::LIGHT_GRAY,
-                    );
+                    painter.rect_filled(r, 13.0, Color32::from_black_alpha((180.0 * alpha) as u8));
+                    painter.galley(r.center() - galley.size() / 2.0, galley, color);
+                    ui.ctx().request_repaint_after(Duration::from_millis(40));
                 }
                 if self.queue.contains(&path) {
                     let r = Rect::from_min_size(
@@ -2575,6 +2644,7 @@ impl App {
         if std::env::var("GLANCE_DEMO").as_deref() == Ok("zoom") {
             if self.demo.1 == 0 && self.demo.0.elapsed().as_secs_f32() > 1.0 {
                 self.zoom = 6.0;
+                self.zoom_changed = Some(Instant::now());
                 self.demo.1 = 1;
             }
             ctx.request_repaint();
