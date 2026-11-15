@@ -7,7 +7,7 @@
 
 A fast photo viewer for Linux, written in Rust: browse a folder, make quick fixes, print.
 
-![glance showing a photo with the details panel open](assets/screenshots/browse.png)
+<p align="center"><img src="assets/screenshots/demo.gif" width="640" alt="glance demo: browsing photos with the arrow keys, the details panel, adding to the print queue, the edit screen and the print dialog"></p>
 
 ## Why
 
@@ -39,9 +39,9 @@ glance does only those three things. It browses a folder instantly, gives you a 
 - **Details**: a side panel with file size, dimensions, camera, lens, focal length, aperture, shutter speed, ISO, date taken and location, read from EXIF (RAW files included).
 - **RAW**: shows the camera's embedded JPEG preview, and "Develop RAW…" opens the file in an installed RAW developer (darktable, RapidRAW, RawTherapee, ART…). glance does not develop RAW files itself.
 
-| Edit | Print |
-|---|---|
-| ![Editing: crop frame, rotation knobs and light sliders](assets/screenshots/edit.png) | ![Print dialog with preview, paper options and ink levels](assets/screenshots/print.png) |
+| Browse | Edit | Print |
+|---|---|---|
+| ![Browsing with the details panel open](assets/screenshots/browse.png) | ![Editing: crop frame, rotation knobs and light sliders](assets/screenshots/edit.png) | ![Print dialog with preview, paper options and ink levels](assets/screenshots/print.png) |
 
 ## Keyboard shortcuts
 
