@@ -1,7 +1,7 @@
 # Maintainer: Hermantino <42477109+Hermantino@users.noreply.github.com>
 pkgname=glance-viewer
 _pkgname=glance
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc='Fast photo viewer: browse a folder, make quick fixes, print (CUPS)'
 arch=('x86_64' 'aarch64')
@@ -21,7 +21,7 @@ optdepends=(
 )
 conflicts=("$_pkgname" 'glance-git')
 source=("$_pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('b59e51d955eaed7a97c501a8e01a433004bee4994cd788c786ecfae3e05e522f')
+sha256sums=('c66392a8b4c1dcdec22b4567a7158b8af1db7c71dceb8e1a24a5ce493886e74a')
 
 prepare() {
   cd "$_pkgname-$pkgver"
