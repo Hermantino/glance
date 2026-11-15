@@ -11,9 +11,13 @@ A fast photo viewer for Linux, written in Rust: browse a folder, make quick fixe
 
 ## Why
 
-Sometimes I don't want to dive into GIMP, darktable, Lightroom or any other image editing software. I just want to browse a folder quickly, pick a photo, make a quick adjustment and print it. Surprisingly, I couldn't find a basic Linux app that does exactly that.
+I'm a hobbyist photographer. For years I developed my Olympus E-M5 Mark II RAW files in Lightroom, RapidRAW or darktable and exported the final JPEGs into folders. When my daughter was born I got a Fujifilm X100VI, for the shortest path from taking a picture to sharing it with the family. And because I love analog photography, I soon wanted real prints and albums, so I bought an Epson ET-8500.
 
-The closest candidates today:
+On Windows and macOS my routine was simple: browse with the system image viewer, open the ones I liked in Photoshop for a quick exposure tweak or crop, then print. On Linux I wanted one simple tool that does exactly that job well: fast browsing, quick last-minute edits, and printing. No albums, no filters, just that workflow.
+
+None of the apps I tried clicked for me, so I made glance. Now I can sit with my daughter for five minutes, open a random folder, browse, mark the photos she likes, and print the whole batch at the end: for her to hang in her room, or for me to put in an album.
+
+The apps I tried:
 
 | | Browse folder with ←/→ | Crop with print ratios | Free rotation | Exposure / brightness | Photo details (EXIF) | Printing |
 |---|---|---|---|---|---|---|
@@ -29,6 +33,10 @@ The closest candidates today:
 - **gThumb** has most of the tools, but it's a full photo organiser (catalogs, tags, slideshows), so it's heavier than "open, adjust, print". Its printing goes through a general-purpose dialog.
 
 glance does only those three things. It browses a folder instantly, gives you a few quick fixes, and has a print dialog designed around photo paper: printer, feeder, paper type, ink levels, fill or fit, and a true-to-size preview. It never stretches the photo. Mark photos as you browse and print the whole batch in one go.
+
+glance isn't meant to become yet another image editor or photo library manager. Feedback and ideas are very welcome with that in mind.
+
+> **How it was made:** I designed glance and use it every day, but its code was written with AI assistance (Claude Code).
 
 ## Features
 

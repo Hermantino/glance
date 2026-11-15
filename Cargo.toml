@@ -1,6 +1,6 @@
 [package]
 name = "glance"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A fast photo viewer for Linux: browse a folder, make quick fixes, print"
 license = "MIT OR Apache-2.0"

@@ -5,9 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-15
+
 ### Added
 - Arch Linux `PKGBUILD` in `packaging/aur/` (package `glance-viewer`).
 - Ready-to-run Linux download attached to each release.
+- README: why glance exists, demo GIF, roadmap link.
 
 ### Fixed
 - The print dialog froze glance for about 2 seconds while CUPS listed printers and their options. Printers are now read in the background at startup and remembered, so the dialog opens instantly.
@@ -24,5 +27,6 @@ First public release.
 - Photo details panel: file facts plus camera, lens, exposure, date and location from EXIF, including RAW files.
 - RAW files show the camera's embedded preview; "Develop RAW…" opens them in an installed RAW developer.
 
-[Unreleased]: https://github.com/Hermantino/glance/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Hermantino/glance/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Hermantino/glance/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Hermantino/glance/releases/tag/v0.1.0
