@@ -18,13 +18,27 @@ fn ext(p: &Path) -> String {
         .to_ascii_lowercase()
 }
 
+/// HEIF family: Fujifilm `.HIF`, iPhone `.HEIC`, AVIF. Decoded through libheif.
+pub const HEIF_EXTS: &[&str] = &["heic", "heif", "hif", "avif"];
+
+pub fn is_heif(p: &Path) -> bool {
+    HEIF_EXTS.contains(&ext(p).as_str())
+}
+
+/// Formats glance can open but not write back: edits are saved as a JPEG copy.
+pub fn read_only_format(p: &Path) -> bool {
+    is_raw(p) || is_heif(p)
+}
+
 pub fn is_raw(p: &Path) -> bool {
     RAW_EXTS.contains(&ext(p).as_str())
 }
 
 pub fn is_supported(p: &Path) -> bool {
     let e = ext(p);
-    IMAGE_EXTS.contains(&e.as_str()) || RAW_EXTS.contains(&e.as_str())
+    IMAGE_EXTS.contains(&e.as_str())
+        || RAW_EXTS.contains(&e.as_str())
+        || HEIF_EXTS.contains(&e.as_str())
 }
 
 /// A path for display, with the home folder shown as `~`.
@@ -85,6 +99,8 @@ pub struct Loaded {
 pub fn load(path: &Path, max_side: Option<u32>) -> Result<Loaded, String> {
     let img = if is_raw(path) {
         load_raw_preview(path)?
+    } else if is_heif(path) {
+        DynamicImage::ImageRgba8(crate::heic::decode(path)?)
     } else {
         load_regular(path)?
     };

@@ -10,6 +10,7 @@ license=('MIT OR Apache-2.0')
 depends=('cups' 'gcc-libs' 'glibc' 'hicolor-icon-theme' 'libxkbcommon' 'vulkan-icd-loader' 'wayland')
 makedepends=('cargo')
 optdepends=(
+  'libheif: open HEIC/HEIF/AVIF photos (e.g. Fujifilm .HIF)'
   'perl-image-exiftool: keep camera metadata when saving edited photos'
   'darktable: develop RAW files'
   'rawtherapee: develop RAW files'

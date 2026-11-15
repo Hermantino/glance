@@ -2,6 +2,7 @@
 mod config;
 mod edit;
 mod files;
+mod heic;
 mod info;
 mod logo;
 mod print;
@@ -104,6 +105,7 @@ enum Msg {
     Saved(PathBuf, Result<PathBuf, String>),
     Printed(Result<String, String>),
     PrintProgress(String),
+    FullRes(PathBuf, Result<TextureHandle, String>),
     /// The Omarchy theme was switched (None: no longer on an Omarchy theme).
     Theme(Option<theme::Palette>),
     Ink(String, Vec<(String, i32, [u8; 3])>),
@@ -227,6 +229,9 @@ struct App {
     /// Photos marked for printing (Space), in the order they were added.
     queue: Vec<PathBuf>,
     queue_open: bool,
+    /// Full-resolution texture of the current photo, loaded only when zoomed in
+    /// past the display copy: (photo, None while loading).
+    fullres: Option<(PathBuf, Option<TextureHandle>)>,
     thumbs: HashMap<PathBuf, Option<Thumb>>,
     /// CUPS answers can take a second each, so they're fetched in the background and kept.
     printers: Option<(Vec<String>, Option<String>)>,
@@ -273,6 +278,7 @@ impl App {
             info_cache: HashMap::new(),
             queue: Vec::new(),
             queue_open: false,
+            fullres: None,
             thumbs: HashMap::new(),
             printers: None,
             printer_options: HashMap::new(),
@@ -330,6 +336,10 @@ impl App {
         self.idx = idx.min(self.files.len() - 1);
         self.zoom = 1.0;
         self.pan = Vec2::ZERO;
+        // Free the full-resolution copy of the previous photo.
+        if self.fullres.as_ref().map(|f| &f.0) != self.files.get(self.idx) {
+            self.fullres = None;
+        }
         // Current first, then the next ones, then the previous ones.
         let n = self.files.len();
         let mut want = vec![self.idx];
@@ -434,6 +444,12 @@ impl App {
                     }
                 },
                 Msg::Theme(p) => theme::apply(&self.ctx, p),
+                Msg::FullRes(path, res) => {
+                    // Keep it only if we're still on that photo.
+                    if self.fullres.as_ref().map(|f| &f.0) == Some(&path) {
+                        self.fullres = res.ok().map(|t| (path, Some(t)));
+                    }
+                }
                 Msg::PrintProgress(m) => {
                     if let Some(p) = &mut self.printing {
                         p.progress = Some(m);
@@ -642,7 +658,7 @@ impl App {
             self.set_status("Nothing to save: no edits");
             return;
         }
-        let mode = if files::is_raw(&path) {
+        let mode = if files::read_only_format(&path) {
             SaveMode::Copy
         } else {
             self.config.save_mode
@@ -1143,12 +1159,56 @@ impl App {
                 }
                 let img_rect =
                     Rect::from_center_size(rect.center() + self.pan, size * fit * self.zoom);
+                // Zoomed in past the display copy's pixels: show the full-resolution
+                // photo instead, loaded in the background (not for edited photos).
+                let edited = self.edits.contains_key(&path);
+                let needs_full = !edited
+                    && e.full.0 > e.img.width()
+                    && img_rect.width() * ppp > e.img.width() as f32 * 1.05;
+                let mut tex = tex;
+                let mut loading_full = false;
+                match &self.fullres {
+                    Some((p, Some(t))) if *p == path && !edited => tex = t.clone(),
+                    Some((p, None)) if *p == path => loading_full = needs_full,
+                    _ if needs_full => {
+                        self.fullres = Some((path.clone(), None));
+                        loading_full = true;
+                        let max = ui.ctx().input(|i| i.max_texture_side) as u32;
+                        let (tx, ctx, p) = (self.tx.clone(), ui.ctx().clone(), path.clone());
+                        rayon::spawn(move || {
+                            let res = files::load(&p, Some(max)).map(|l| {
+                                let ci = egui::ColorImage::from_rgba_unmultiplied(
+                                    [l.img.width() as usize, l.img.height() as usize],
+                                    l.img.as_raw(),
+                                );
+                                ctx.load_texture("full", ci, TEX)
+                            });
+                            let _ = tx.send(Msg::FullRes(p, res));
+                            ctx.request_repaint();
+                        });
+                    }
+                    _ => {}
+                }
                 painter.image(
                     tex.id(),
                     img_rect,
                     Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
                     Color32::WHITE,
                 );
+                if loading_full {
+                    let r = Rect::from_min_size(
+                        rect.left_bottom() + Vec2::new(12.0, -38.0),
+                        Vec2::new(200.0, 26.0),
+                    );
+                    painter.rect_filled(r, 13.0, Color32::from_black_alpha(180));
+                    painter.text(
+                        r.center(),
+                        Align2::CENTER_CENTER,
+                        "Loading full resolution…",
+                        FontId::proportional(13.0),
+                        Color32::LIGHT_GRAY,
+                    );
+                }
                 if self.queue.contains(&path) {
                     let r = Rect::from_min_size(
                         rect.min + Vec2::new(12.0, 12.0),
@@ -1517,7 +1577,15 @@ impl App {
                         "Overwrite the original",
                     )
                     .changed();
-                ui.weak("RAW files are always saved as a JPEG copy.");
+                ui.weak("RAW and HEIC files are always saved as a JPEG copy.");
+                if heic::available() {
+                    ui.weak("HEIC / HEIF / AVIF support: on (libheif found).");
+                } else {
+                    ui.colored_label(
+                        theme::accent(),
+                        "HEIC / HEIF / AVIF support: install libheif to open these photos.",
+                    );
+                }
                 ui.add_space(6.0);
                 changed |= ui
                     .add(
@@ -2503,6 +2571,15 @@ fn resolve_start(start: Option<PathBuf>) -> (PathBuf, Vec<PathBuf>, usize) {
 impl App {
     /// A timed tour of the main features, for recording the README demo.
     fn demo_step(&mut self, ctx: &egui::Context) {
+        // GLANCE_DEMO=zoom: just zoom to 6× after a second (to check full-resolution loading).
+        if std::env::var("GLANCE_DEMO").as_deref() == Ok("zoom") {
+            if self.demo.1 == 0 && self.demo.0.elapsed().as_secs_f32() > 1.0 {
+                self.zoom = 6.0;
+                self.demo.1 = 1;
+            }
+            ctx.request_repaint();
+            return;
+        }
         // (time in seconds, event)
         const EVENTS: &[f32] = &[
             2.0, 3.2, 4.4, 5.6, 7.4, 8.0, 9.0, 10.0, 14.6, 15.8, 16.6, 18.2, 21.6, 22.4,

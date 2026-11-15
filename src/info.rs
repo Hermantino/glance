@@ -41,6 +41,8 @@ pub fn read(path: &Path, full: (u32, u32), size: u64) -> Info {
         "Format",
         if files::is_raw(path) {
             format!("{ext} (RAW, showing embedded preview)")
+        } else if files::is_heif(path) {
+            format!("{ext} (HEIF)")
         } else {
             ext
         },
