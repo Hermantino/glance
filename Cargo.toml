@@ -1,0 +1,19 @@
+[package]
+name = "glance"
+version = "0.1.0"
+edition = "2024"
+description = "A fast photo viewer for Linux: browse a folder, make quick fixes, print"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Hermantino/glance"
+readme = "README.md"
+keywords = ["photo", "image-viewer", "printing", "egui", "linux"]
+categories = ["multimedia::images", "graphics"]
+
+[dependencies]
+eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "wayland", "x11", "default_fonts"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "tiff", "webp", "gif", "bmp", "rayon"] }
+kamadak-exif = "0.6.2"
+natord = "1.0.9"
+rayon = "1.12.0"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.2.1"
