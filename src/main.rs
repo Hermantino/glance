@@ -105,7 +105,7 @@ enum Msg {
     Saved(PathBuf, Result<PathBuf, String>),
     Printed(Result<String, String>),
     PrintProgress(String),
-    FullRes(PathBuf, Result<TextureHandle, String>),
+    FullRes(PathBuf, EditParams, Result<TextureHandle, String>),
     /// The Omarchy theme was switched (None: no longer on an Omarchy theme).
     Theme(Option<theme::Palette>),
     Ink(String, Vec<(String, i32, [u8; 3])>),
@@ -231,7 +231,9 @@ struct App {
     queue_open: bool,
     /// Full-resolution texture of the current photo, loaded only when zoomed in
     /// past the display copy: (photo, None while loading).
-    fullres: Option<(PathBuf, Option<TextureHandle>)>,
+    fullres: Option<(PathBuf, EditParams, Option<TextureHandle>)>,
+    /// Zoom asked for from the status-bar menu or keys: 0 = fit, else percent.
+    zoom_request: Option<f32>,
     /// When the zoom last changed, and when the full-resolution photo arrived (for the zoom label).
     zoom_changed: Option<Instant>,
     full_arrived: Option<Instant>,
@@ -284,6 +286,7 @@ impl App {
             queue: Vec::new(),
             queue_open: false,
             fullres: None,
+            zoom_request: None,
             zoom_changed: None,
             full_arrived: None,
             zoom_text: String::new(),
@@ -452,10 +455,10 @@ impl App {
                     }
                 },
                 Msg::Theme(p) => theme::apply(&self.ctx, p),
-                Msg::FullRes(path, res) => {
-                    // Keep it only if we're still on that photo.
-                    if self.fullres.as_ref().map(|f| &f.0) == Some(&path) {
-                        self.fullres = res.ok().map(|t| (path, Some(t)));
+                Msg::FullRes(path, params, res) => {
+                    // Keep it only if we're still on that photo, with the same edits.
+                    if self.fullres.as_ref().map(|f| (&f.0, f.1)) == Some((&path, params)) {
+                        self.fullres = res.ok().map(|t| (path, params, Some(t)));
                         if self.fullres.is_some() {
                             self.full_arrived = Some(Instant::now());
                         }
@@ -825,7 +828,7 @@ impl App {
         }
         let n = self.files.len();
         let space = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Space));
-        let (next, prev, home, end, e, p, f, esc, zero, q, info_key) = ctx.input(|i| {
+        let (next, prev, home, end, e, p, f, esc, zero, q, info_key, z100, z200) = ctx.input(|i| {
             (
                 i.key_pressed(Key::ArrowRight)
                     || i.key_pressed(Key::ArrowDown)
@@ -843,6 +846,8 @@ impl App {
                 i.key_pressed(Key::Num0),
                 i.key_pressed(Key::Q),
                 i.key_pressed(Key::I),
+                i.key_pressed(Key::Num1),
+                i.key_pressed(Key::Num2),
             )
         });
         if n > 0 {
@@ -878,9 +883,13 @@ impl App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
         }
         if zero {
-            self.zoom = 1.0;
-            self.zoom_changed = Some(Instant::now());
-            self.pan = Vec2::ZERO;
+            self.zoom_request = Some(0.0);
+        }
+        if z100 {
+            self.zoom_request = Some(100.0);
+        }
+        if z200 {
+            self.zoom_request = Some(200.0);
         }
         if q {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1101,7 +1110,17 @@ impl App {
             if let Some(e) = self.current_entry() {
                 ui.weak(format!("{} × {} px · {}", e.full.0, e.full.1, info::human_size(e.file_size)));
                 if !self.zoom_text.is_empty() {
-                    ui.weak(format!("· {}", self.zoom_text));
+                    ui.weak("·");
+                    ui.menu_button(egui::RichText::new(&self.zoom_text).weak(), |ui| {
+                        for (label, pct) in [("Fit  (0)", 0.0), ("50%", 50.0), ("100%  (1)", 100.0), ("200%  (2)", 200.0)] {
+                            if ui.button(label).clicked() {
+                                self.zoom_request = Some(pct);
+                                ui.close();
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("Zoom: Fit, 50%, 100% (actual pixels), 200%");
                 }
             }
             ui.weak(format!("· {}", files::display_path(&self.dir)));
@@ -1112,7 +1131,7 @@ impl App {
                 }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.available_width() > 520.0 {
-                    ui.weak(format!("{ICON_PREV}{ICON_NEXT} browse · Space queue · E edit · P print · Shift+P print queue · I info · F fullscreen"));
+                    ui.weak(format!("{ICON_PREV}{ICON_NEXT} browse · Space queue · E edit · P print · Shift+P print queue · I info · 0/1/2 zoom · F fullscreen"));
                 }
             });
         });
@@ -1142,6 +1161,21 @@ impl App {
                 let fit = (rect.width() / size.x)
                     .min(rect.height() / size.y)
                     .min(1.0 / ppp * e.full.0 as f32 / e.img.width() as f32);
+                // The photo's real width, with edits (crop, rotation) applied.
+                let params = self.edits.get(&path).copied().unwrap_or_default();
+                let edited = !params.is_identity();
+                let photo_w = params.output_size(e.full.0 as f32, e.full.1 as f32).0;
+                // Zoom factor that shows the photo at `pct` percent of its real size.
+                let zoom_for = |pct: f32| pct / 100.0 * photo_w / (ppp * size.x * fit);
+                if let Some(t) = self.zoom_request.take() {
+                    self.zoom = if t <= 0.0 {
+                        1.0
+                    } else {
+                        zoom_for(t).clamp(0.2, 40.0)
+                    };
+                    self.pan = Vec2::ZERO;
+                    self.zoom_changed = Some(Instant::now());
+                }
                 if resp.hovered() {
                     let scroll = ui.input(|i| i.smooth_scroll_delta.y);
                     if scroll != 0.0 {
@@ -1158,14 +1192,8 @@ impl App {
                     self.pan += resp.drag_delta();
                 }
                 if resp.double_clicked() {
-                    // Toggle between fit and 1:1 (one image pixel per screen pixel).
-                    let one = (e.full.0 as f32 / ppp) / (size.x * fit)
-                        * (size.x / e.img.width() as f32).min(1.0);
-                    let one = if self.edits.contains_key(&path) {
-                        1.0 / ppp / fit
-                    } else {
-                        one
-                    };
+                    // Toggle between fit and 100% (one photo pixel per screen pixel).
+                    let one = zoom_for(100.0);
                     if (self.zoom - 1.0).abs() < 0.01 {
                         self.zoom = one.max(1.0);
                     } else {
@@ -1176,31 +1204,43 @@ impl App {
                 }
                 let img_rect =
                     Rect::from_center_size(rect.center() + self.pan, size * fit * self.zoom);
-                // Zoomed in past the display copy's pixels: show the full-resolution
-                // photo instead, loaded in the background (not for edited photos).
-                let edited = self.edits.contains_key(&path);
-                let needs_full = !edited
-                    && e.full.0 > e.img.width()
-                    && img_rect.width() * ppp > e.img.width() as f32 * 1.05;
+                // Zoomed in past the shown copy's pixels: show the full-resolution
+                // photo instead, built in the background (with the edits applied).
+                let shown_w = tex.size_vec2().x;
+                let needs_full =
+                    photo_w > shown_w * 1.01 && img_rect.width() * ppp > shown_w * 1.05;
                 let mut tex = tex;
                 let mut loading_full = false;
                 match &self.fullres {
-                    Some((p, Some(t))) if *p == path && !edited => tex = t.clone(),
-                    Some((p, None)) if *p == path => loading_full = needs_full,
+                    Some((p, q, Some(t))) if *p == path && *q == params => tex = t.clone(),
+                    Some((p, q, None)) if *p == path && *q == params => loading_full = needs_full,
                     _ if needs_full => {
-                        self.fullres = Some((path.clone(), None));
+                        self.fullres = Some((path.clone(), params, None));
                         loading_full = true;
                         let max = ui.ctx().input(|i| i.max_texture_side) as u32;
                         let (tx, ctx, p) = (self.tx.clone(), ui.ctx().clone(), path.clone());
                         rayon::spawn(move || {
-                            let res = files::load(&p, Some(max)).map(|l| {
-                                let ci = egui::ColorImage::from_rgba_unmultiplied(
-                                    [l.img.width() as usize, l.img.height() as usize],
-                                    l.img.as_raw(),
-                                );
-                                ctx.load_texture("full", ci, TEX)
-                            });
-                            let _ = tx.send(Msg::FullRes(p, res));
+                            let res =
+                                files::load(&p, if edited { None } else { Some(max) }).map(|l| {
+                                    let img = if edited {
+                                        let out = edit::render(&l.img, &params);
+                                        if out.width().max(out.height()) > max {
+                                            image::DynamicImage::ImageRgba8(out)
+                                                .thumbnail(max, max)
+                                                .into_rgba8()
+                                        } else {
+                                            out
+                                        }
+                                    } else {
+                                        l.img
+                                    };
+                                    let ci = egui::ColorImage::from_rgba_unmultiplied(
+                                        [img.width() as usize, img.height() as usize],
+                                        img.as_raw(),
+                                    );
+                                    ctx.load_texture("full", ci, TEX)
+                                });
+                            let _ = tx.send(Msg::FullRes(p, params, res));
                             ctx.request_repaint();
                         });
                     }
@@ -1213,21 +1253,13 @@ impl App {
                     Color32::WHITE,
                 );
                 // Zoom readout: 100% = one photo pixel per screen pixel.
-                let photo_w = if edited {
-                    self.edits
-                        .get(&path)
-                        .map(|p| p.output_size(e.full.0 as f32, e.full.1 as f32).0)
-                        .unwrap_or(e.full.0 as f32)
-                } else {
-                    e.full.0 as f32
-                };
                 let pct = img_rect.width() * ppp / photo_w * 100.0;
                 let tex_w = tex.size_vec2().x;
                 let full_detail = tex_w >= photo_w * 0.99;
                 // Zoomed further than the shown image has pixels for.
                 let preview_only = !full_detail && img_rect.width() * ppp > tex_w * 1.05;
                 let fit = (self.zoom - 1.0).abs() < 0.01;
-                let using_full = full_detail && e.full.0 > e.img.width();
+                let using_full = full_detail && photo_w > shown_w * 1.01;
                 self.zoom_text = if fit {
                     format!("Fit · {pct:.0}%")
                 } else if using_full {
@@ -2640,12 +2672,26 @@ fn resolve_start(start: Option<PathBuf>) -> (PathBuf, Vec<PathBuf>, usize) {
 impl App {
     /// A timed tour of the main features, for recording the README demo.
     fn demo_step(&mut self, ctx: &egui::Context) {
-        // GLANCE_DEMO=zoom: just zoom to 6× after a second (to check full-resolution loading).
-        if std::env::var("GLANCE_DEMO").as_deref() == Ok("zoom") {
-            if self.demo.1 == 0 && self.demo.0.elapsed().as_secs_f32() > 1.0 {
-                self.zoom = 6.0;
-                self.zoom_changed = Some(Instant::now());
+        // GLANCE_DEMO=zoom / zoomedit: jump to 100% after a second (zoomedit edits the
+        // photo first), to check full-resolution loading.
+        let mode = std::env::var("GLANCE_DEMO").unwrap_or_default();
+        if mode == "zoom" || mode == "zoomedit" {
+            let t = self.demo.0.elapsed().as_secs_f32();
+            if mode == "zoomedit" && self.demo.1 == 0 && t > 0.6 && self.current_entry().is_some() {
+                if let Some(path) = self.current().cloned() {
+                    let p = EditParams {
+                        exposure: 0.6,
+                        crop: Some([0.2, 0.2, 0.6, 0.6]),
+                        ..Default::default()
+                    };
+                    self.edits.insert(path.clone(), p);
+                    self.render_edited(path);
+                }
                 self.demo.1 = 1;
+            }
+            if self.demo.1 <= 1 && t > 1.5 {
+                self.zoom_request = Some(100.0);
+                self.demo.1 = 2;
             }
             ctx.request_repaint();
             return;
