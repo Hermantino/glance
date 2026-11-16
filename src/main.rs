@@ -241,6 +241,8 @@ struct App {
     /// Photos marked for printing (Space), in the order they were added.
     queue: Vec<PathBuf>,
     queue_open: bool,
+    /// Photo the queue list last scrolled to, so it follows browsing only on change.
+    queue_scrolled: Option<PathBuf>,
     /// Full-resolution texture of the current photo, loaded only when zoomed in
     /// past the display copy: (photo, None while loading).
     fullres: Option<(PathBuf, EditParams, Option<TextureHandle>)>,
@@ -300,6 +302,7 @@ impl App {
             info_open: false,
             queue: Vec::new(),
             queue_open: false,
+            queue_scrolled: None,
             fullres: None,
             zoom_request: None,
             zoom_changed: None,
@@ -1075,9 +1078,14 @@ impl App {
         let mut remove = None;
         let mut goto = None;
         let items = self.queue.clone();
+        let current = self.current().cloned();
+        // Scroll to the photo being viewed once each time it changes, not every
+        // frame, so the list can still be scrolled by hand.
+        let follow = current != self.queue_scrolled;
+        self.queue_scrolled = current.clone();
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (i, path) in items.iter().enumerate() {
-                ui.horizontal(|ui| {
+                let row = ui.horizontal(|ui| {
                     let (r, resp) = ui.allocate_exact_size(Vec2::splat(64.0), Sense::click());
                     ui.painter().rect_filled(r, 4.0, Color32::from_gray(40));
                     if let Some(t) = self.preview_tex(path) {
@@ -1110,6 +1118,18 @@ impl App {
                         }
                     });
                 });
+                if current.as_ref() == Some(path) {
+                    let r = row.response.rect.expand(3.0);
+                    ui.painter().rect_stroke(
+                        r,
+                        6.0,
+                        Stroke::new(2.0, theme::accent()),
+                        egui::StrokeKind::Inside,
+                    );
+                    if follow {
+                        ui.scroll_to_rect(r, None);
+                    }
+                }
             }
         });
         if let Some(i) = remove {
@@ -2848,6 +2868,7 @@ impl App {
                     "queue" => {
                         self.toggle_queue();
                         self.queue_open = true;
+                        self.info_open = false;
                     }
                     "edit" => {
                         self.start_edit();
