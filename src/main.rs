@@ -1074,7 +1074,7 @@ impl App {
                 self.queue.clear();
             }
         });
-        ui.add_space(6.0);
+        ui.add_space(2.0);
         let mut remove = None;
         let mut goto = None;
         let items = self.queue.clone();
@@ -1084,6 +1084,9 @@ impl App {
         let follow = current != self.queue_scrolled;
         self.queue_scrolled = current.clone();
         egui::ScrollArea::vertical().show(ui, |ui| {
+            // Room for the current photo's outline, which sits just outside its
+            // row and would be clipped at the top of the list.
+            ui.add_space(4.0);
             for (i, path) in items.iter().enumerate() {
                 let row = ui.horizontal(|ui| {
                     let (r, resp) = ui.allocate_exact_size(Vec2::splat(64.0), Sense::click());
