@@ -7,7 +7,7 @@
 
 A fast photo viewer for Linux, written in Rust: browse a folder, make quick fixes, print.
 
-<p align="center"><img src="assets/screenshots/demo.gif" width="640" alt="glance demo: browsing photos with the arrow keys, the details panel, adding to the print queue, cropping to 10×15, rotating, brightening, comparing with the original, and the print dialog"></p>
+<p align="center"><img src="assets/screenshots/demo.gif" width="800" alt="glance demo: browsing photos with the arrow keys, the details panel, adding to the print queue, cropping to 10×15, rotating, brightening, comparing with the original, and the print dialog"></p>
 
 ## Why
 
