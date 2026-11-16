@@ -5,14 +5,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-16
+
 ### Added
 - HEIC / HEIF / AVIF photos, including Fujifilm `.HIF`, decoded with the system's libheif when it's installed. Edits to them are saved as a JPEG copy.
-- Full-resolution zoom: zooming in past the display copy loads the photo at full size in the background (e.g. 7728 px for a 40 MP Fujifilm photo, instead of 3840 px).
-- Zoom presets: Fit, 50%, 100% and 200% from the zoom readout in the status bar, or keys 0 / 1 / 2.
-- Edited photos also get the full-resolution view when zoomed in: the edits are applied to the full-size photo in the background.
-- Zoom readout: the status bar shows the zoom as a percentage of the photo's real size (100% = one photo pixel per screen pixel), and a label over the photo shows it while zooming, with "loading full resolution…" and "✓ full resolution" as the full-size photo arrives.
+- Full-resolution zoom: zooming in loads the photo at full size in the background (e.g. 7728 px for a 40 MP Fujifilm photo, instead of the 3840 px display copy), with the edits applied for edited photos.
+- Zoom readout and presets: the status bar shows the zoom as a percentage of the photo's real size and whether full resolution is loaded; click it for Fit, 50%, 100% or 200%, or press 0 / 1 / 2.
 - On Omarchy, glance follows the active theme live: accent, background and corner rounding. Elsewhere it keeps its own amber look.
 - Undo and redo in Edit (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y, and buttons). A whole slider or crop drag undoes in one step.
+- `glance --version` and `glance --help`; the version is also shown in Preferences.
+- Preferences say whether exiftool is installed, and saving says so when camera information couldn't be kept.
+
+### Fixed
+- Straightened photos no longer get thin white slivers along the edges when saved or printed.
+- Portrait Fujifilm RAF photos are turned upright, and their camera details are shown (RAF files keep both in the embedded preview, not in a TIFF header).
+- Saving keeps the photo's colour profile (e.g. Adobe RGB).
+- "Overwrite, keep the original": the backup is written safely, and a different photo with the same name gets its own backup instead of being skipped.
+- Saving a photo again while the previous save is still running is refused instead of racing on the same file.
+- After overwriting a photo, the view, print queue thumbnail and details show the new version.
+- Borderless prints start at the very edge of the paper (they were shifted by one pixel).
+- The print dialog explains what's wrong when no printer is found, when a printer's options can't be read, or when a paper size isn't recognised. More paper size names are recognised (e.g. `iso_a4_210x297mm`, `na_index-4x6_4x6in`, Tabloid, A3+).
+- Graphics memory no longer grows with every edited photo you browse past.
+- The "edited" marker in the toolbar showed an empty box.
+- The "full resolution" label no longer flashes on the next photo.
+- A garbled date in a photo's EXIF, or a printer option without values, can no longer crash glance.
+- The print queue panel no longer mentions several photos per sheet.
 
 ## [0.1.1] - 2026-11-15
 
@@ -36,6 +53,7 @@ First public release.
 - Photo details panel: file facts plus camera, lens, exposure, date and location from EXIF, including RAW files.
 - RAW files show the camera's embedded preview; "Develop RAW…" opens them in an installed RAW developer.
 
-[Unreleased]: https://github.com/Hermantino/glance/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Hermantino/glance/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/Hermantino/glance/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Hermantino/glance/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Hermantino/glance/releases/tag/v0.1.0

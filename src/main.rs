@@ -102,7 +102,8 @@ enum Slot {
 enum Msg {
     Loaded(PathBuf, Result<Entry, String>),
     Edited(PathBuf, EditParams, TextureHandle),
-    Saved(PathBuf, Result<PathBuf, String>),
+    /// Source, and (written file, whether its camera info was kept).
+    Saved(PathBuf, Result<(PathBuf, bool), String>),
     Printed(Result<String, String>),
     PrintProgress(String),
     FullRes(PathBuf, EditParams, Result<TextureHandle, String>),
@@ -167,7 +168,7 @@ struct EditState {
     full: (f32, f32),
     /// The unedited photo, for the before/after comparison.
     orig_tex: TextureHandle,
-    /// Showing the original (held \\ key or compare button).
+    /// Showing the original (held B key or compare button).
     before: bool,
     /// Before/after forced on by the demo tour.
     hold_before: bool,
@@ -307,6 +308,8 @@ impl App {
             app.config.last_printer.clone(),
         );
         std::thread::spawn(move || {
+            // Also find out whether exiftool is there, off the UI thread.
+            files::exiftool_available();
             let (dests, default) = print::destinations();
             let first = last
                 .filter(|l| dests.contains(l))
@@ -347,10 +350,13 @@ impl App {
         self.idx = idx.min(self.files.len() - 1);
         self.zoom = 1.0;
         self.pan = Vec2::ZERO;
-        // Free the full-resolution copy of the previous photo.
+        // Free the full-resolution copy of the previous photo, and don't carry
+        // its zoom label or "full resolution" cue over to this one.
         if self.fullres.as_ref().map(|f| &f.0) != self.files.get(self.idx) {
             self.fullres = None;
         }
+        self.zoom_changed = None;
+        self.full_arrived = None;
         // Current first, then the next ones, then the previous ones.
         let n = self.files.len();
         let mut want = vec![self.idx];
@@ -363,6 +369,9 @@ impl App {
         }
         let keep: Vec<&PathBuf> = want.iter().map(|&i| &self.files[i]).collect();
         self.cache.retain(|p, _| keep.contains(&p));
+        // Edited display copies use graphics memory too; they're rebuilt from
+        // the edits when the photo comes back into the window.
+        self.edited_tex.retain(|p, _| keep.contains(&p));
     }
 
     fn request(&mut self, path: PathBuf) {
@@ -421,21 +430,37 @@ impl App {
                     }
                 }
                 Msg::Edited(path, params, tex) => {
-                    if self.edits.get(&path) == Some(&params) {
+                    if self.edits.get(&path) == Some(&params) && self.cache.contains_key(&path) {
                         self.edited_tex.insert(path, (params, tex));
                     }
                 }
                 Msg::Saved(src, res) => {
                     self.busy_saving = false;
                     match res {
-                        Ok(dst) => {
+                        Ok((dst, meta)) => {
                             if dst == src {
-                                // The edits are now baked into the file itself.
+                                // The edits are now baked into the file itself:
+                                // forget everything made from the old pixels.
                                 self.edits.remove(&src);
                                 self.edited_tex.remove(&src);
                                 self.cache.remove(&src);
+                                self.thumbs.remove(&src);
+                                self.info_cache.remove(&src);
+                                if self.fullres.as_ref().is_some_and(|f| f.0 == src) {
+                                    self.fullres = None;
+                                }
                             }
-                            self.set_status(format!("Saved {}", files::file_name(&dst)));
+                            let name = files::file_name(&dst);
+                            if meta {
+                                self.set_status(format!("Saved {name}"));
+                            } else if !files::exiftool_available() {
+                                self.set_status(format!(
+                                    "Saved {name}, without camera info (install exiftool to keep it)"
+                                ));
+                            } else {
+                                // e.g. BMP, which can't hold camera info.
+                                self.set_status(format!("Saved {name}, without camera info"));
+                            }
                             self.reload_dir(Some(src));
                         }
                         Err(e) => self.set_status(format!("Save failed: {e}")),
@@ -672,6 +697,11 @@ impl App {
             self.set_status("Nothing to save: no edits");
             return;
         }
+        // One save at a time: two saves of the same photo would race on its file.
+        if self.busy_saving {
+            self.set_status("Still saving the previous photo…");
+            return;
+        }
         let mode = if files::read_only_format(&path) {
             SaveMode::Copy
         } else {
@@ -689,31 +719,14 @@ impl App {
                     SaveMode::Copy => files::copy_path(&path),
                     SaveMode::Overwrite => path.clone(),
                     SaveMode::OverwriteBackup => {
-                        let dir = path.parent().unwrap_or(Path::new(".")).join(".originals");
-                        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-                        let backup = dir.join(path.file_name().unwrap_or_default());
-                        if !backup.exists() {
-                            std::fs::copy(&path, &backup).map_err(|e| e.to_string())?;
-                        }
+                        files::backup_original(&path)?;
                         path.clone()
                     }
                 };
-                // Keep the original's metadata: from the file itself, or from a backup when overwriting.
-                let meta_src = if dst == path {
-                    let tmp = std::env::temp_dir()
-                        .join(format!("glance-meta-{}", files::file_name(&path)));
-                    std::fs::copy(&path, &tmp).ok().map(|_| tmp)
-                } else {
-                    Some(path.clone())
-                };
-                files::write_image(&out, &dst, quality)?;
-                if let Some(m) = meta_src {
-                    files::copy_metadata(&m, &dst);
-                    if m != path {
-                        let _ = std::fs::remove_file(m);
-                    }
-                }
-                Ok(dst)
+                // The metadata is copied from the original onto the new file
+                // before it replaces anything, so overwriting needs no extra copy.
+                let meta = files::write_image(&out, &dst, quality, Some(&path))?;
+                Ok((dst, meta))
             })();
             let _ = tx.send(Msg::Saved(path, res));
             ctx.request_repaint();
@@ -913,17 +926,27 @@ impl App {
             );
             ui.separator();
             let n = self.files.len();
-            if ui.button(ICON_PREV).on_hover_text("Previous (←)").clicked() && n > 0 {
+            if ui
+                .button(ICON_PREV)
+                .on_hover_text("Previous (Left arrow)")
+                .clicked()
+                && n > 0
+            {
                 self.go((self.idx + n - 1) % n);
             }
-            if ui.button(ICON_NEXT).on_hover_text("Next (→)").clicked() && n > 0 {
+            if ui
+                .button(ICON_NEXT)
+                .on_hover_text("Next (Right arrow)")
+                .clicked()
+                && n > 0
+            {
                 self.go((self.idx + 1) % n);
             }
             if let Some(p) = self.current().cloned() {
                 ui.label(egui::RichText::new(files::file_name(&p)).strong());
                 ui.weak(format!("{} / {}", self.idx + 1, n));
                 if self.edits.contains_key(&p) {
-                    ui.colored_label(theme::accent(), "● edited");
+                    ui.colored_label(theme::accent(), format!("{ICON_EDIT} edited"));
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -992,7 +1015,7 @@ impl App {
         });
         if self.queue.is_empty() {
             ui.add_space(8.0);
-            ui.label("Press Space on a photo to add it here. Then print them all at once, one or several per sheet.");
+            ui.label("Press Space on a photo to add it here. Then print them all in one go, one photo per sheet.");
             return;
         }
         ui.horizontal(|ui| {
@@ -1471,7 +1494,7 @@ impl App {
                                 .dests
                                 .get(pu.dest)
                                 .cloned()
-                                .unwrap_or_else(|| "(no printers found)".into());
+                                .unwrap_or_else(|| "(none found)".into());
                             let mut new_dest = pu.dest;
                             egui::ComboBox::from_id_salt("dest")
                                 .width(330.0)
@@ -1486,12 +1509,24 @@ impl App {
                                 dest_changed = true;
                             }
                             ui.end_row();
-                            ui.label("");
-                            ui.vertical(|ui| {
-                                ui.weak(format!("Status: {}", pu.state));
-                                ink_bars(ui, pu.ink.as_deref());
-                            });
-                            ui.end_row();
+                            if !pu.dests.is_empty() && !pu.loading {
+                                ui.label("");
+                                ui.vertical(|ui| {
+                                    ui.weak(format!("Status: {}", pu.state));
+                                    ink_bars(ui, pu.ink.as_deref());
+                                });
+                                ui.end_row();
+                            }
+                            if let Some(problem) = pu.problem() {
+                                ui.label("");
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(problem).color(theme::accent()),
+                                    )
+                                    .wrap(),
+                                );
+                                ui.end_row();
+                            }
 
                             for (key, name) in [
                                 ("PageSize", "Paper size"),
@@ -1687,6 +1722,14 @@ impl App {
                         "HEIC / HEIF / AVIF support: install libheif to open these photos.",
                     );
                 }
+                if files::exiftool_available() {
+                    ui.weak("Camera info is kept when saving (exiftool found).");
+                } else {
+                    ui.colored_label(
+                        theme::accent(),
+                        "Install exiftool to keep camera info (date, camera, GPS) when saving.",
+                    );
+                }
                 ui.add_space(6.0);
                 changed |= ui
                     .add(
@@ -1728,6 +1771,8 @@ impl App {
                         "Show rule-of-thirds guides when editing",
                     )
                     .changed();
+                ui.add_space(10.0);
+                ui.weak(format!("glance {}", env!("CARGO_PKG_VERSION")));
             });
         self.prefs_open = open;
         if changed {
@@ -1875,8 +1920,10 @@ fn draw_print_preview(ui: &egui::Ui, rect: Rect, pu: &PrintUi, items: &[PreviewI
             Align2::CENTER_CENTER,
             if pu.loading {
                 "Reading printer options…"
+            } else if pu.dests.is_empty() {
+                "No printer"
             } else {
-                "Choose a paper size"
+                "No paper size to preview"
             },
             FontId::proportional(14.0),
             Color32::GRAY,
@@ -2000,6 +2047,34 @@ impl PrintUi {
         self.loading = false;
     }
 
+    /// Why nothing can be printed, in words a user can act on.
+    fn problem(&self) -> Option<String> {
+        if self.loading {
+            return None;
+        }
+        if self.dests.is_empty() {
+            return Some(
+                "No printers found. glance prints through CUPS: check that it is installed \
+                 and running, and that a printer is added (http://localhost:631)."
+                    .into(),
+            );
+        }
+        let Some(key) = self.page_key() else {
+            return Some(
+                "glance couldn't read this printer's paper sizes from CUPS. Check that the \
+                 printer is set up with a driver (http://localhost:631)."
+                    .into(),
+            );
+        };
+        if print::paper_mm(key).is_none() {
+            return Some(format!(
+                "glance doesn't know the paper size \"{key}\" yet. Pick another, and please \
+                 report it: github.com/Hermantino/glance/issues"
+            ));
+        }
+        None
+    }
+
     fn page_key(&self) -> Option<&str> {
         let i = self.opts.iter().position(|o| o.key == "PageSize")?;
         Some(self.opts[i].values[self.sel[i]].as_str())
@@ -2101,8 +2176,11 @@ impl EditState {
         let mut p = self.params;
         let g = self.geo();
         let [x, y, w, h] = self.crop;
-        let full =
-            x.abs() < 0.5 && y.abs() < 0.5 && (w - g.cw).abs() < 0.5 && (h - g.ch).abs() < 0.5;
+        let full = p.angle == 0.0
+            && x.abs() < 0.5
+            && y.abs() < 0.5
+            && (w - g.cw).abs() < 0.5
+            && (h - g.ch).abs() < 0.5;
         p.crop = if full {
             None
         } else {
@@ -2675,6 +2753,41 @@ impl App {
         // GLANCE_DEMO=zoom / zoomedit: jump to 100% after a second (zoomedit edits the
         // photo first), to check full-resolution loading.
         let mode = std::env::var("GLANCE_DEMO").unwrap_or_default();
+        // GLANCE_DEMO=show:<screen>: open one screen and stay there, for
+        // screenshots and checking dialogs (info, edit, print, prefs, queue).
+        if let Some(what) = mode.strip_prefix("show:") {
+            let t = self.demo.0.elapsed().as_secs_f32();
+            if self.demo.1 == 0 && t > 0.8 && self.current_entry().is_some() {
+                match what {
+                    "info" => self.info_open = true,
+                    "prefs" => self.prefs_open = true,
+                    "queue" => {
+                        self.toggle_queue();
+                        self.queue_open = true;
+                    }
+                    "edit" => {
+                        self.start_edit();
+                        if let Some(st) = self.editing.as_mut() {
+                            st.params.angle = 1.5;
+                            st.params.exposure = 0.3;
+                            st.ratio = 3;
+                            st.ratio_portrait = false;
+                            st.crop_auto = true;
+                            st.refit(false);
+                        }
+                    }
+                    "print" => {
+                        if let Some(p) = self.current().cloned() {
+                            self.open_print(vec![p]);
+                        }
+                    }
+                    _ => {}
+                }
+                self.demo.1 = 1;
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            return;
+        }
         if mode == "zoom" || mode == "zoomedit" {
             let t = self.demo.0.elapsed().as_secs_f32();
             if mode == "zoomedit" && self.demo.1 == 0 && t > 0.6 && self.current_entry().is_some() {
@@ -2822,8 +2935,44 @@ impl eframe::App for App {
     }
 }
 
+const HELP: &str = "glance: browse, quickly fix and print photos.
+
+Usage: glance [PHOTO or FOLDER]
+
+With a photo, glance opens it and browses its folder; with a folder, the first
+photo in it; with nothing, the current folder.
+
+Options:
+  -h, --help       Show this help
+  -V, --version    Show the version
+
+Keys: Left/Right browse, E edit, P print, Space print queue, I details,
+F fullscreen, 0/1/2 zoom. More in the README:
+https://github.com/Hermantino/glance";
+
 fn main() -> eframe::Result {
-    let start = std::env::args_os().nth(1).map(PathBuf::from);
+    let mut start = None;
+    for arg in std::env::args_os().skip(1) {
+        match arg.to_str() {
+            Some("-h" | "--help") => {
+                println!("{HELP}");
+                return Ok(());
+            }
+            Some("-V" | "--version") => {
+                println!("glance {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            Some(s) if s.starts_with('-') && s.len() > 1 && !std::path::Path::new(s).exists() => {
+                eprintln!("glance: unknown option {s}\n\n{HELP}");
+                std::process::exit(2);
+            }
+            _ => {
+                if start.is_none() {
+                    start = Some(PathBuf::from(arg));
+                }
+            }
+        }
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_app_id("glance")
@@ -2921,6 +3070,56 @@ mod tests {
         assert!(g.rect_inside(r));
         assert!(r[2] < 4000.0 && r[2] > 3000.0);
         assert!(!g.rect_inside([0.0, 0.0, 4000.0, 3000.0]));
+    }
+
+    /// A crop chosen on the small edit preview must stay on the photo when it is
+    /// rendered at full size (no empty slivers along the edges), at any angle.
+    #[test]
+    fn straightened_crop_has_no_empty_edges_at_full_size() {
+        let (fw, fh) = (7728.0f32, 5152.0f32);
+        let (pw, ph) = (2048.0f32, 2048.0 * fh / fw);
+        for deg in [0.1f32, 0.2, 0.5, 1.0, 3.0, 10.0, -7.0, 45.0] {
+            let a = deg.to_radians();
+            let preview = Geo {
+                cw: pw,
+                ch: ph,
+                angle: a,
+            };
+            let r = preview.max_rect(pw / ph);
+            let n = [r[0] / pw, r[1] / ph, r[2] / pw, r[3] / ph];
+            // Corners of the crop at full size, turned back onto the photo.
+            let (s, c) = (-a).sin_cos();
+            for (x, y) in [
+                (n[0], n[1]),
+                (n[0] + n[2], n[1]),
+                (n[0], n[1] + n[3]),
+                (n[0] + n[2], n[1] + n[3]),
+            ] {
+                let (dx, dy) = (x * fw - fw / 2.0, y * fh - fh / 2.0);
+                let ux = c * dx - s * dy + fw / 2.0;
+                let uy = s * dx + c * dy + fh / 2.0;
+                assert!(
+                    ux >= 0.5 && uy >= 0.5 && ux <= fw - 0.5 && uy <= fh - 0.5,
+                    "{deg}°: crop corner ({ux}, {uy}) is off the photo"
+                );
+            }
+        }
+        // Unrotated, the whole photo is still a valid crop.
+        let g = Geo {
+            cw: fw,
+            ch: fh,
+            angle: 0.0,
+        };
+        assert!(g.rect_inside([0.0, 0.0, fw, fh]));
+        // …but a crop dragged even a fraction of a pixel past an edge is not.
+        let p = Geo {
+            cw: pw,
+            ch: ph,
+            angle: 0.0,
+        };
+        assert!(p.rect_inside([0.0, 0.0, pw, ph]));
+        assert!(!p.rect_inside([0.0, 0.0, pw + 0.05, ph]));
+        assert!(!p.rect_inside([-0.05, 0.0, pw, ph]));
     }
 
     #[test]

@@ -120,6 +120,13 @@ fn stamp() -> Option<(SystemTime, Option<SystemTime>)> {
 /// Check the theme files once a second on a background thread and call
 /// `changed` with the new palette after a switch. Cheap: two `stat` calls.
 pub fn watch(changed: impl Fn(Option<Palette>) + Send + 'static) {
+    // Not on Omarchy: nothing to follow.
+    if !theme_dir()
+        .and_then(|d| d.parent()?.parent().map(|p| p.is_dir()))
+        .unwrap_or(false)
+    {
+        return;
+    }
     std::thread::spawn(move || {
         let mut last = stamp();
         loop {

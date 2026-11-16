@@ -46,9 +46,13 @@ pub fn destinations() -> (Vec<String>, Option<String>) {
 
 /// Options of a destination, with the preset's saved values as defaults.
 pub fn options(dest: &str) -> Vec<PpdOption> {
-    let Some(s) = run("lpoptions", &["-p", dest, "-l"]) else {
-        return vec![];
-    };
+    run("lpoptions", &["-p", dest, "-l"])
+        .map(|s| parse_options(&s))
+        .unwrap_or_default()
+}
+
+/// Parse `lpoptions -l` output: `Key/Label: value *default value`.
+fn parse_options(s: &str) -> Vec<PpdOption> {
     s.lines()
         .filter_map(|l| {
             let (head, vals) = l.split_once(": ")?;
@@ -64,7 +68,10 @@ pub fn options(dest: &str) -> Vec<PpdOption> {
                     }
                     None => v.to_string(),
                 })
-                .collect();
+                .collect::<Vec<String>>();
+            if values.is_empty() {
+                return None;
+            }
             Some(PpdOption {
                 key: key.into(),
                 label: label.into(),
@@ -120,6 +127,10 @@ pub fn paper_mm(key: &str) -> Option<(f32, f32, bool)> {
     {
         return Some((w, h, true));
     }
+    // A size written in the name: "100x150mm", "iso_a4_210x297mm", "na_index-4x6_4x6in".
+    if let Some((w, h)) = size_in_name(&k) {
+        return Some((w, h, borderless));
+    }
     // Generic "w288h432" (PostScript points).
     let lower = k.to_ascii_lowercase();
     if let Some(rest) = lower.strip_prefix('w')
@@ -137,18 +148,40 @@ pub fn paper_mm(key: &str) -> Option<(f32, f32, bool)> {
     None
 }
 
+/// A trailing "<width>x<height>" followed by "mm", "cm" or "in", in mm.
+fn size_in_name(k: &str) -> Option<(f32, f32)> {
+    let lower = k.to_ascii_lowercase();
+    let (rest, unit) = [("mm", 1.0), ("cm", 10.0), ("in", 25.4)]
+        .into_iter()
+        .find_map(|(u, f)| lower.strip_suffix(u).map(|r| (r, f)))?;
+    let start = rest
+        .rfind(|c: char| !(c.is_ascii_digit() || c == '.' || c == 'x'))
+        .map_or(0, |i| i + 1);
+    let (w, h) = rest[start..].split_once('x')?;
+    let (w, h) = (w.parse::<f32>().ok()? * unit, h.parse::<f32>().ok()? * unit);
+    let ok = |v: f32| (20.0..=2000.0).contains(&v);
+    (ok(w) && ok(h)).then_some((w.min(h), w.max(h)))
+}
+
 fn known_size(k: &str) -> Option<(f32, f32)> {
     let mm = match k.to_ascii_lowercase().as_str() {
+        "a2" => (420.0, 594.0),
         "a3" => (297.0, 420.0),
+        "a3+" | "a3plus" | "super_b" | "superb" => (329.0, 483.0),
         "a4" => (210.0, 297.0),
         "a5" => (148.0, 210.0),
         "a6" => (105.0, 148.0),
-        "b5" => (182.0, 257.0),
+        "b5" | "jb5" => (182.0, 257.0),
+        "isob5" => (176.0, 250.0),
         "b6" => (128.0, 182.0),
         "letter" => (215.9, 279.4),
         "legal" => (215.9, 355.6),
-        "4x6full" | "4x6" | "4x6in" | "photo4x6" | "10x15cm" | "w288h432" => (101.6, 152.4),
-        "2l" | "5x7" | "5x7in" | "photo5x7" | "13x18cm" => (127.0, 177.8),
+        "executive" => (184.15, 266.7),
+        "tabloid" | "ledger" | "11x17" => (279.4, 431.8),
+        "4x6full" | "4x6" | "4x6in" | "photo4x6" | "10x15cm" | "10x15" | "w288h432" => {
+            (101.6, 152.4)
+        }
+        "2l" | "5x7" | "5x7in" | "photo5x7" | "13x18cm" | "13x18" => (127.0, 177.8),
         "l" | "3.5x5" | "3.5x5in" | "photol" | "9x13cm" => (88.9, 127.0),
         "8x10" | "8x10in" => (203.2, 254.0),
         "4x7" => (101.6, 177.8),
@@ -169,14 +202,27 @@ pub fn value_label(key: &str, v: &str) -> String {
         ("PageSize", _) => {
             return match paper_mm(v) {
                 Some((w, h, b)) => {
-                    let base = match v.trim_start_matches('T') {
+                    // The name without the borderless marks (Epson's leading T, ".Borderless", …).
+                    let mut name = v;
+                    for suf in [
+                        ".Borderless",
+                        ".FB",
+                        ".Fullbleed",
+                        "Borderless",
+                        ".FullBleed",
+                    ] {
+                        name = name.strip_suffix(suf).unwrap_or(name);
+                    }
+                    if b && known_size(name).is_none() {
+                        name = name.strip_prefix('T').unwrap_or(name);
+                    }
+                    let base = match name {
                         "4X6FULL" => "10×15 cm (4×6\")".to_string(),
                         "2L" => "13×18 cm (5×7\")".to_string(),
                         "L" => "9×13 cm (3.5×5\")".to_string(),
                         "8x10" => "20×25 cm (8×10\")".to_string(),
                         "4X7" => "10×18 cm (4×7\")".to_string(),
-                        _ => format!("{v} ({:.0}×{:.0} mm)", w, h)
-                            .replace("T", if b { "" } else { "T" }),
+                        _ => format!("{name} ({w:.0}×{h:.0} mm)"),
                     };
                     if b {
                         format!("{base} – borderless")
@@ -399,19 +445,14 @@ pub fn draw_into(
     )
     .to_image();
     let rgb = DynamicImage::ImageRgba8(crop).into_rgb8();
-    let px = |mm: f32| (mm / 25.4 * DPI).round().max(1.0) as u32;
-    let resized = imageops::resize(
-        &rgb,
-        px(pl.dest[2]),
-        px(pl.dest[3]),
-        imageops::FilterType::CatmullRom,
-    );
-    imageops::overlay(
-        canvas,
-        &resized,
-        px(pl.dest[0]) as i64,
-        px(pl.dest[1]) as i64,
-    );
+    // Edges are rounded to whole pixels and the size taken between them, so a
+    // photo placed at the paper edge starts at pixel 0 and reaches the far edge.
+    let pos = |mm: f32| (mm / 25.4 * DPI).round().max(0.0) as u32;
+    let [x, y, w, h] = pl.dest;
+    let (x0, y0) = (pos(x), pos(y));
+    let (x1, y1) = (pos(x + w).max(x0 + 1), pos(y + h).max(y0 + 1));
+    let resized = imageops::resize(&rgb, x1 - x0, y1 - y0, imageops::FilterType::CatmullRom);
+    imageops::overlay(canvas, &resized, x0 as i64, y0 as i64);
 }
 
 /// Ink levels reported by the printer: (name, percent, colour as RGB).
@@ -564,11 +605,80 @@ fn write_pdf(sheets: &[(Vec<u8>, u32, u32)], page_w: f32, page_h: f32) -> Vec<u8
 mod tests {
     use super::*;
 
-    /// Builds a real 3-photo job as a PDF (nothing is printed).
+    #[test]
+    fn paper_names() {
+        let mm = |k: &str| paper_mm(k).map(|(w, h, b)| (w.round(), h.round(), b));
+        // Epson ET-8500 names.
+        assert_eq!(mm("T4X6FULL"), Some((102.0, 152.0, true)));
+        assert_eq!(mm("4X6FULL"), Some((102.0, 152.0, false)));
+        assert_eq!(mm("A4"), Some((210.0, 297.0, false)));
+        assert_eq!(mm("TA4"), Some((210.0, 297.0, true)));
+        assert_eq!(mm("T2L"), Some((127.0, 178.0, true)));
+        // Other drivers.
+        assert_eq!(mm("A4.Borderless"), Some((210.0, 297.0, true)));
+        assert_eq!(mm("w288h432"), Some((102.0, 152.0, false)));
+        assert_eq!(mm("100x150mm"), Some((100.0, 150.0, false)));
+        assert_eq!(mm("iso_a4_210x297mm"), Some((210.0, 297.0, false)));
+        assert_eq!(mm("na_index-4x6_4x6in"), Some((102.0, 152.0, false)));
+        assert_eq!(mm("Executive"), Some((184.0, 267.0, false)));
+        assert_eq!(mm("Tabloid"), Some((279.0, 432.0, false)));
+        assert_eq!(mm("A3+"), Some((329.0, 483.0, false)));
+        assert_eq!(mm("Custom.WIDTHxHEIGHT"), None);
+        // Labels drop only Epson's borderless T.
+        assert_eq!(
+            value_label("PageSize", "TA4"),
+            "A4 (210×297 mm) – borderless"
+        );
+        assert_eq!(value_label("PageSize", "Tabloid"), "Tabloid (279×432 mm)");
+        assert_eq!(
+            value_label("PageSize", "T4X6FULL"),
+            "10×15 cm (4×6\") – borderless"
+        );
+    }
+
+    #[test]
+    fn printer_options_are_parsed() {
+        let o = parse_options(
+            "PageSize/Media Size: A4 *T4X6FULL Letter\nInputSlot/Paper Source: Auto *Cassette1\nEmpty/Nothing: \n",
+        );
+        assert_eq!(o.len(), 2, "an option with no values is skipped");
+        assert_eq!(o[0].key, "PageSize");
+        assert_eq!(o[0].label, "Media Size");
+        assert_eq!(o[0].values, ["A4", "T4X6FULL", "Letter"]);
+        assert_eq!(o[0].default, 1);
+        assert_eq!(o[1].values[o[1].default], "Cassette1");
+    }
+
+    /// Borderless: the photo covers the whole sheet, from the first pixel to the last.
+    #[test]
+    fn borderless_photo_reaches_every_edge() {
+        let (pw, ph) = (1200u32, 1800u32); // 10×15 cm at 300 dpi
+        let mut canvas = RgbImage::from_pixel(pw, ph, image::Rgb([255, 255, 255]));
+        let photo = RgbaImage::from_pixel(400, 300, image::Rgba([0, 0, 0, 255]));
+        let cell = [0.0, 0.0, 101.6, 152.4];
+        draw_into(&mut canvas, &photo, cell, Scale::Fill, Orient::Auto);
+        for (x, y) in [(0, 0), (pw - 1, 0), (0, ph - 1), (pw - 1, ph - 1)] {
+            assert_eq!(canvas.get_pixel(x, y).0, [0, 0, 0], "corner ({x}, {y})");
+        }
+    }
+
+    /// Builds a 3-photo job as a PDF (nothing is printed), from real photos when
+    /// GLANCE_TEST_PHOTOS is set, otherwise from generated ones.
     #[test]
     fn queue_job_pdf() {
-        let Some(dir) = crate::tests::test_photos() else {
-            return;
+        let generated =
+            std::env::temp_dir().join(format!("glance-pdf-test-{}", std::process::id()));
+        let dir = match crate::tests::test_photos() {
+            Some(d) => d,
+            None => {
+                std::fs::create_dir_all(&generated).unwrap();
+                for (i, (w, h)) in [(400, 300), (300, 400), (500, 500)].into_iter().enumerate() {
+                    RgbImage::from_pixel(w, h, image::Rgb([30 * i as u8, 90, 160]))
+                        .save(generated.join(format!("p{i}.jpg")))
+                        .unwrap();
+                }
+                generated.clone()
+            }
         };
         let items: Vec<_> = files::list_dir(&dir)
             .into_iter()
@@ -616,5 +726,11 @@ mod tests {
                 i + 1
             );
         }
+        assert_eq!(
+            text.matches("/Type /Page /Parent").count(),
+            3,
+            "three pages"
+        );
+        let _ = std::fs::remove_dir_all(&generated);
     }
 }

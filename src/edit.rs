@@ -72,8 +72,17 @@ impl Geo {
         let (s, c) = (-self.angle).sin_cos();
         let ux = c * dx - s * dy + cx;
         let uy = s * dx + c * dy + cy;
-        let eps = 1e-3 * self.cw.max(self.ch);
-        ux >= -eps && uy >= -eps && ux <= self.cw + eps && uy <= self.ch + eps
+        // The crop is stored as fractions and re-rendered at full size, so any
+        // slack outward here would show up along the edges of the saved photo.
+        // Unrotated: the photo's own edges, with only a float-rounding allowance
+        // (a thousandth of a pixel) so the whole photo still counts as inside.
+        // Rotated: a small inward margin, since the tilted edges cut through pixels.
+        let m = if self.angle == 0.0 {
+            -1e-3
+        } else {
+            5e-4 * self.cw.max(self.ch)
+        };
+        ux >= m && uy >= m && ux <= self.cw - m && uy <= self.ch - m
     }
 
     pub fn rect_inside(&self, r: [f32; 4]) -> bool {
@@ -220,10 +229,9 @@ pub fn render(src: &RgbaImage, p: &EditParams) -> RgbaImage {
 }
 
 fn bilinear(img: &RgbaImage, x: f32, y: f32) -> [u8; 4] {
+    // Samples just past the edge repeat the edge pixel; the crop constraint
+    // keeps samples on the photo, so nothing outside it is ever painted.
     let (w, h) = (img.width() as i64, img.height() as i64);
-    if x < -1.0 || y < -1.0 || x > w as f32 || y > h as f32 {
-        return [255, 255, 255, 255];
-    }
     let x0 = x.floor();
     let y0 = y.floor();
     let (fx, fy) = (x - x0, y - y0);

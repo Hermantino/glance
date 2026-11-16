@@ -139,7 +139,7 @@ pub fn read(path: &Path, full: (u32, u32), size: u64) -> Info {
 /// "2024:07:11 14:03:22" → "2024-07-11 14:03"
 fn pretty_date(s: &str) -> String {
     let s = s.trim();
-    if s.len() >= 16 && s.as_bytes()[4] == b':' {
+    if s.is_ascii() && s.len() >= 16 && s.as_bytes()[4] == b':' {
         format!("{} {}", s[..10].replace(':', "-"), &s[11..16])
     } else {
         s.to_string()
@@ -157,6 +157,14 @@ fn read_exif(path: &Path) -> Option<exif::Exif> {
             .take(16 << 20)
             .read_to_end(&mut data)
             .ok()?;
+        if !files::is_tiff_based(&data) {
+            // Not TIFF-based (Fujifilm RAF): the camera info is in the embedded JPEG.
+            return files::embedded_jpegs(&data).into_iter().find_map(|j| {
+                reader
+                    .read_from_container(&mut std::io::Cursor::new(j))
+                    .ok()
+            });
+        }
         if data.len() > 8 && &data[0..2] == b"II" {
             data[2] = 42;
             data[3] = 0;
@@ -193,4 +201,17 @@ fn gps(ex: &exif::Exif) -> Option<String> {
     let lat = coord(Tag::GPSLatitude, Tag::GPSLatitudeRef)?;
     let lon = coord(Tag::GPSLongitude, Tag::GPSLongitudeRef)?;
     Some(format!("{lat:.5}, {lon:.5}"))
+}
+
+#[cfg(test)]
+mod date_tests {
+    use super::pretty_date;
+
+    #[test]
+    fn dates_are_tidied_and_garbled_ones_shown_as_is() {
+        assert_eq!(pretty_date("2024:07:11 14:03:22"), "2024-07-11 14:03");
+        // Not plain text: must not crash, shown unchanged.
+        assert_eq!(pretty_date("2024:07:1é 14:03:22"), "2024:07:1é 14:03:22");
+        assert_eq!(pretty_date("    "), "");
+    }
 }
