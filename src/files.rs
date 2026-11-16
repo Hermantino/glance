@@ -30,6 +30,10 @@ pub fn read_only_format(p: &Path) -> bool {
     is_raw(p) || is_heif(p)
 }
 
+pub fn is_raf(p: &Path) -> bool {
+    ext(p) == "raf"
+}
+
 pub fn is_raw(p: &Path) -> bool {
     RAW_EXTS.contains(&ext(p).as_str())
 }
@@ -96,19 +100,40 @@ pub struct Loaded {
 
 /// Load an image, applying its EXIF orientation. With `max_side`, the result is
 /// downscaled (fast area averaging) so its longest side is at most that.
+/// Returned by `load_wanted` when the photo was no longer wanted.
+pub const SKIPPED: &str = "skipped: no longer needed";
+
 pub fn load(path: &Path, max_side: Option<u32>) -> Result<Loaded, String> {
-    let img = if is_raw(path) {
-        load_raw_preview(path)?
+    load_wanted(path, max_side, &|| true)
+}
+
+/// Like `load`, but gives up with `SKIPPED` if `wanted` says the photo isn't
+/// needed any more by the time it's its turn to be read (browsing moved on).
+pub fn load_wanted(
+    path: &Path,
+    max_side: Option<u32>,
+    wanted: &dyn Fn() -> bool,
+) -> Result<Loaded, String> {
+    let (img, orientation) = if is_raw(path) {
+        load_raw_preview(path, wanted)?
     } else if is_heif(path) {
-        DynamicImage::ImageRgba8(crate::heic::decode(path)?)
+        (
+            DynamicImage::ImageRgba8(crate::heic::decode(path)?),
+            Orientation::NoTransforms,
+        )
     } else {
-        load_regular(path)?
+        load_regular(path, wanted)?
     };
-    let (full_w, full_h) = (img.width(), img.height());
-    let img = match max_side {
-        Some(m) if full_w.max(full_h) > m => img.thumbnail(m, m),
-        _ => img,
+    // Shrink first, then turn: turning the small copy is much cheaper.
+    let (mut full_w, mut full_h) = (img.width(), img.height());
+    let mut img = match max_side {
+        Some(m) => shrink(img, m),
+        None => img,
     };
+    img.apply_orientation(orientation);
+    if swaps_sides(orientation) {
+        std::mem::swap(&mut full_w, &mut full_h);
+    }
     Ok(Loaded {
         img: img.into_rgba8(),
         full_w,
@@ -116,22 +141,149 @@ pub fn load(path: &Path, max_side: Option<u32>) -> Result<Loaded, String> {
     })
 }
 
-fn load_regular(path: &Path) -> Result<DynamicImage, String> {
-    let reader = image::ImageReader::open(path)
-        .map_err(|e| e.to_string())?
+fn swaps_sides(o: Orientation) -> bool {
+    matches!(
+        o,
+        Orientation::Rotate90
+            | Orientation::Rotate270
+            | Orientation::Rotate90FlipH
+            | Orientation::Rotate270FlipH
+    )
+}
+
+/// Files are read whole, one at a time: on an SD card or a network share,
+/// parallel reads would make the photo you're looking at wait for the ones
+/// being preloaded. Decoding still runs in parallel.
+static READ_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn read_file(path: &Path, wanted: &dyn Fn() -> bool) -> Result<Vec<u8>, String> {
+    let _one_at_a_time = READ_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if !wanted() {
+        return Err(SKIPPED.into());
+    }
+    std::fs::read(path).map_err(|e| e.to_string())
+}
+
+/// Fujifilm RAF: the camera's JPEG preview is listed in the header (offset and
+/// length at byte 84), so only that part is read: about 6 MB of a 47 MB file.
+fn read_raf_preview(path: &Path, wanted: &dyn Fn() -> bool) -> Option<Result<Vec<u8>, String>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let _one_at_a_time = READ_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if !wanted() {
+        return Some(Err(SKIPPED.into()));
+    }
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 92];
+    f.read_exact(&mut head).ok()?;
+    if !head.starts_with(b"FUJIFILMCCD-RAW") {
+        return None;
+    }
+    let off = u32::from_be_bytes(head[84..88].try_into().ok()?) as u64;
+    let len = u32::from_be_bytes(head[88..92].try_into().ok()?) as usize;
+    if !(4..=64 << 20).contains(&len) || off > f.metadata().ok()?.len() {
+        return None;
+    }
+    f.seek(SeekFrom::Start(off)).ok()?;
+    let mut jpeg = vec![0u8; len];
+    f.read_exact(&mut jpeg).ok()?;
+    jpeg.starts_with(&[0xFF, 0xD8]).then_some(Ok(jpeg))
+}
+
+/// The bytes to look for a RAW file's previews and camera info in: just the
+/// preview for Fujifilm RAF, otherwise the whole file.
+pub fn raw_preview_bytes(path: &Path, wanted: &dyn Fn() -> bool) -> Result<Vec<u8>, String> {
+    match read_raf_preview(path, wanted) {
+        Some(r) => r,
+        None => read_file(path, wanted),
+    }
+}
+
+fn load_regular(
+    path: &Path,
+    wanted: &dyn Fn() -> bool,
+) -> Result<(DynamicImage, Orientation), String> {
+    let data = read_file(path, wanted)?;
+    let reader = image::ImageReader::new(std::io::Cursor::new(data))
         .with_guessed_format()
         .map_err(|e| e.to_string())?;
     let mut dec = reader.into_decoder().map_err(|e| e.to_string())?;
     let orientation = dec.orientation().unwrap_or(Orientation::NoTransforms);
-    let mut img = DynamicImage::from_decoder(dec).map_err(|e| e.to_string())?;
-    img.apply_orientation(orientation);
-    Ok(img)
+    let img = DynamicImage::from_decoder(dec).map_err(|e| e.to_string())?;
+    Ok((img, orientation))
+}
+
+/// Shrink `img` so its longest side is at most `max`, averaging the pixels each
+/// output pixel covers (like `DynamicImage::thumbnail`), on all CPU cores.
+pub fn shrink(img: DynamicImage, max: u32) -> DynamicImage {
+    let (w, h) = (img.width(), img.height());
+    if w.max(h) <= max {
+        return img;
+    }
+    let s = max as f64 / w.max(h) as f64;
+    let ow = ((w as f64 * s).round() as u32).clamp(1, max);
+    let oh = ((h as f64 * s).round() as u32).clamp(1, max);
+    match img {
+        DynamicImage::ImageRgb8(i) => DynamicImage::ImageRgb8(
+            image::RgbImage::from_raw(ow, oh, area_average(i.as_raw(), w, h, 3, ow, oh)).unwrap(),
+        ),
+        DynamicImage::ImageRgba8(i) => DynamicImage::ImageRgba8(
+            RgbaImage::from_raw(ow, oh, area_average(i.as_raw(), w, h, 4, ow, oh)).unwrap(),
+        ),
+        other => other.thumbnail(max, max),
+    }
+}
+
+/// For each output position, the source pixels it covers and their weights.
+fn spans(n: u32, on: u32) -> Vec<Vec<(usize, f32)>> {
+    let scale = n as f64 / on as f64;
+    (0..on)
+        .map(|o| {
+            let (a, b) = (o as f64 * scale, (o + 1) as f64 * scale);
+            (a.floor() as usize..(b.ceil() as usize).min(n as usize))
+                .filter_map(|i| {
+                    let cover = b.min(i as f64 + 1.0) - a.max(i as f64);
+                    (cover > 0.0).then_some((i, (cover / scale) as f32))
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn area_average(src: &[u8], w: u32, h: u32, c: usize, ow: u32, oh: u32) -> Vec<u8> {
+    use rayon::prelude::*;
+    let (xs, ys) = (spans(w, ow), spans(h, oh));
+    let row_len = w as usize * c;
+    let mut out = vec![0u8; ow as usize * oh as usize * c];
+    out.par_chunks_mut(ow as usize * c)
+        .zip(ys.par_iter())
+        .for_each(|(row, ys)| {
+            let mut acc = vec![0f32; ow as usize * c];
+            for &(sy, wy) in ys {
+                let srow = &src[sy * row_len..(sy + 1) * row_len];
+                for (ox, xs) in xs.iter().enumerate() {
+                    let a = &mut acc[ox * c..(ox + 1) * c];
+                    for &(sx, wx) in xs {
+                        let wgt = wx * wy;
+                        for (k, v) in a.iter_mut().enumerate() {
+                            *v += srow[sx * c + k] as f32 * wgt;
+                        }
+                    }
+                }
+            }
+            for (o, a) in row.iter_mut().zip(&acc) {
+                *o = (a + 0.5).clamp(0.0, 255.0) as u8;
+            }
+        });
+    out
 }
 
 /// RAW files carry a full-size JPEG made by the camera. Show that instead of
 /// developing the RAW: instant, and the same look as the camera JPEG.
-fn load_raw_preview(path: &Path) -> Result<DynamicImage, String> {
-    let data = std::fs::read(path).map_err(|e| e.to_string())?;
+fn load_raw_preview(
+    path: &Path,
+    wanted: &dyn Fn() -> bool,
+) -> Result<(DynamicImage, Orientation), String> {
+    let data = raw_preview_bytes(path, wanted)?;
     let mut candidates = embedded_jpegs(&data);
     // TIFF-based RAWs (ORF, NEF, CR2, ARW, DNG…) store the rotation in their
     // header. Fujifilm RAF keeps it only in the embedded JPEG's EXIF.
@@ -141,12 +293,11 @@ fn load_raw_preview(path: &Path) -> Result<DynamicImage, String> {
         .unwrap_or(Orientation::NoTransforms);
     candidates.sort_by_key(|s| std::cmp::Reverse(s.len()));
     for jpeg in candidates.into_iter().take(4) {
-        if let Ok(mut img) = image::load_from_memory_with_format(jpeg, ImageFormat::Jpeg) {
+        if let Ok(img) = image::load_from_memory_with_format(jpeg, ImageFormat::Jpeg) {
             if img.width() < 200 {
                 continue;
             }
-            img.apply_orientation(orientation);
-            return Ok(img);
+            return Ok((img, orientation));
         }
     }
     Err("this RAW file has no embedded preview".into())
@@ -505,6 +656,84 @@ mod tests {
         let l = load(&path, None).unwrap();
         assert_eq!((l.full_w, l.full_h), (300, 400), "rotated to portrait");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The multi-core shrink keeps the shape and averages colours like the
+    /// single-core one it replaces.
+    #[test]
+    fn shrink_keeps_shape_and_colours() {
+        let mut img = image::RgbImage::new(7728, 5152);
+        for (x, _, p) in img.enumerate_pixels_mut() {
+            *p = if x < 3864 {
+                image::Rgb([200, 40, 40])
+            } else {
+                image::Rgb([20, 60, 220])
+            };
+        }
+        let fast = shrink(DynamicImage::ImageRgb8(img.clone()), 3840).into_rgb8();
+        let slow = DynamicImage::ImageRgb8(img)
+            .thumbnail(3840, 3840)
+            .into_rgb8();
+        assert_eq!(fast.dimensions(), (3840, 2560));
+        assert_eq!(fast.dimensions(), slow.dimensions());
+        assert_eq!(fast.get_pixel(100, 100).0, [200, 40, 40]);
+        assert_eq!(fast.get_pixel(3700, 2000).0, [20, 60, 220]);
+        // Smaller than the limit: untouched.
+        let small = DynamicImage::ImageRgb8(image::RgbImage::new(800, 600));
+        let s = shrink(small, 3840);
+        assert_eq!((s.width(), s.height()), (800, 600));
+    }
+
+    /// On real photos (GLANCE_TEST_PHOTOS), the fast load gives the same size
+    /// and orientation as decoding, turning and shrinking with the image
+    /// crate, and its pixels are at least as close to a high-quality
+    /// (Lanczos) resize as the image crate's own thumbnail.
+    #[test]
+    fn fast_load_matches_reference_on_real_photos() {
+        let Some(dir) = crate::tests::test_photos() else {
+            return;
+        };
+        // (A folder with only RAW or HEIF files has nothing to compare.)
+        for p in list_dir(&dir)
+            .into_iter()
+            .filter(|p| !is_raw(p) && !is_heif(p))
+            .take(4)
+        {
+            let fast = load(&p, Some(1024)).unwrap();
+            let mut dec = image::ImageReader::open(&p)
+                .unwrap()
+                .with_guessed_format()
+                .unwrap()
+                .into_decoder()
+                .unwrap();
+            let o = dec.orientation().unwrap();
+            let mut full = DynamicImage::from_decoder(dec).unwrap();
+            full.apply_orientation(o);
+            let thumb = full.thumbnail(1024, 1024).into_rgba8();
+            assert_eq!(
+                (fast.full_w, fast.full_h),
+                (full.width(), full.height()),
+                "{p:?}"
+            );
+            assert_eq!(fast.img.dimensions(), thumb.dimensions(), "{p:?}");
+            let (w, h) = thumb.dimensions();
+            let best = image::imageops::resize(
+                &full.to_rgba8(),
+                w,
+                h,
+                image::imageops::FilterType::Lanczos3,
+            );
+            let mse = |a: &RgbaImage| {
+                a.as_raw()
+                    .iter()
+                    .zip(best.as_raw())
+                    .map(|(x, y)| (*x as f64 - *y as f64).powi(2))
+                    .sum::<f64>()
+                    / best.as_raw().len() as f64
+            };
+            let (new, old) = (mse(&fast.img), mse(&thumb));
+            assert!(new <= old * 1.05, "{p:?}: {new:.1} vs {old:.1}");
+        }
     }
 
     /// A preview whose end marker is the last two bytes of the file is found.

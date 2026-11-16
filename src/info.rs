@@ -151,6 +151,14 @@ fn read_exif(path: &Path) -> Option<exif::Exif> {
     if files::is_raw(path) {
         // Most RAW formats are TIFF inside, some with their own magic number
         // (Olympus ORF uses "IIRO"/"IIRS"). Patch it to plain TIFF and parse.
+        // Fujifilm RAF: only its embedded preview (where the camera info is).
+        if files::is_raf(path)
+            && let Ok(jpeg) = files::raw_preview_bytes(path, &|| true)
+        {
+            return reader
+                .read_from_container(&mut std::io::Cursor::new(jpeg))
+                .ok();
+        }
         let mut data = Vec::new();
         std::fs::File::open(path)
             .ok()?

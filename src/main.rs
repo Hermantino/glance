@@ -28,6 +28,8 @@ const DISPLAY_MAX: u32 = 3840;
 const EDIT_MAX: u32 = 2048;
 /// Images kept loaded on each side of the current one.
 const KEEP: usize = 2;
+/// Photos preloaded in the direction you're browsing (and one behind).
+const AHEAD: usize = 3;
 
 const TEX: TextureOptions = TextureOptions {
     magnification: egui::TextureFilter::Linear,
@@ -91,6 +93,8 @@ struct Entry {
     img: Arc<RgbaImage>,
     full: (u32, u32),
     file_size: u64,
+    /// Details for the info panel, read in the background with the photo.
+    info: Arc<info::Info>,
 }
 
 enum Slot {
@@ -208,6 +212,11 @@ struct App {
     files: Vec<PathBuf>,
     idx: usize,
     cache: HashMap<PathBuf, Slot>,
+    /// The photos the cache window wants right now, shared with the loading
+    /// threads so they can skip photos you've already browsed past.
+    wanted: Arc<std::sync::Mutex<std::collections::HashSet<PathBuf>>>,
+    /// Browsing direction: 1 forward, -1 backward.
+    direction: isize,
     edits: HashMap<PathBuf, EditParams>,
     edited_tex: HashMap<PathBuf, (EditParams, TextureHandle)>,
     tx: mpsc::Sender<Msg>,
@@ -224,9 +233,11 @@ struct App {
     title: String,
     #[cfg(feature = "demo")]
     demo: (Instant, usize),
+    /// GLANCE_DEMO=browse: when each step was taken, and how long its photo took.
+    #[cfg(feature = "demo")]
+    browse_log: Vec<(Instant, Option<f32>)>,
     logo: TextureHandle,
     info_open: bool,
-    info_cache: HashMap<PathBuf, Arc<info::Info>>,
     /// Photos marked for printing (Space), in the order they were added.
     queue: Vec<PathBuf>,
     queue_open: bool,
@@ -261,6 +272,8 @@ impl App {
             files,
             idx,
             cache: HashMap::new(),
+            wanted: Default::default(),
+            direction: 1,
             edits: HashMap::new(),
             edited_tex: HashMap::new(),
             tx,
@@ -277,13 +290,14 @@ impl App {
             title: String::new(),
             #[cfg(feature = "demo")]
             demo: (Instant::now(), 0),
+            #[cfg(feature = "demo")]
+            browse_log: Vec::new(),
             logo: cc.egui_ctx.load_texture(
                 "logo",
                 egui::ColorImage::from_rgba_unmultiplied([64, 64], &logo::rgba(64)),
                 TEX,
             ),
             info_open: false,
-            info_cache: HashMap::new(),
             queue: Vec::new(),
             queue_open: false,
             fullres: None,
@@ -347,7 +361,14 @@ impl App {
         if self.files.is_empty() {
             return;
         }
-        self.idx = idx.min(self.files.len() - 1);
+        let n = self.files.len();
+        let idx = idx.min(n - 1);
+        if idx == (self.idx + 1) % n {
+            self.direction = 1;
+        } else if idx == (self.idx + n - 1) % n {
+            self.direction = -1;
+        }
+        self.idx = idx;
         self.zoom = 1.0;
         self.pan = Vec2::ZERO;
         // Free the full-resolution copy of the previous photo, and don't carry
@@ -357,17 +378,27 @@ impl App {
         }
         self.zoom_changed = None;
         self.full_arrived = None;
-        // Current first, then the next ones, then the previous ones.
-        let n = self.files.len();
+        // Current first, then the next ones in the direction you're browsing,
+        // then one behind (photos already seen stay cached up to KEEP behind).
+        let step = |d: usize, dir: isize| {
+            (self.idx as isize + dir * d as isize).rem_euclid(n as isize) as usize
+        };
         let mut want = vec![self.idx];
-        for d in 1..=KEEP {
-            want.push((self.idx + d) % n);
-            want.push((self.idx + n - d) % n);
+        for d in 1..=AHEAD {
+            want.push(step(d, self.direction));
         }
+        want.push(step(1, -self.direction));
+        let mut keep_idx = want.clone();
+        for d in 2..=KEEP {
+            keep_idx.push(step(d, -self.direction));
+        }
+        want.dedup();
+        *self.wanted.lock().unwrap_or_else(|e| e.into_inner()) =
+            keep_idx.iter().map(|&i| self.files[i].clone()).collect();
         for &i in &want {
             self.request(self.files[i].clone());
         }
-        let keep: Vec<&PathBuf> = want.iter().map(|&i| &self.files[i]).collect();
+        let keep: Vec<&PathBuf> = keep_idx.iter().map(|&i| &self.files[i]).collect();
         self.cache.retain(|p, _| keep.contains(&p));
         // Edited display copies use graphics memory too; they're rebuilt from
         // the edits when the photo comes back into the window.
@@ -379,22 +410,36 @@ impl App {
             return;
         }
         self.cache.insert(path.clone(), Slot::Loading);
-        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        let (tx, ctx, wanted) = (self.tx.clone(), self.ctx.clone(), self.wanted.clone());
         rayon::spawn(move || {
-            let res = files::load(&path, Some(DISPLAY_MAX)).map(|l| {
+            let still_wanted = || {
+                wanted
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains(&path)
+            };
+            let res = files::load_wanted(&path, Some(DISPLAY_MAX), &still_wanted).map(|l| {
                 let ci = egui::ColorImage::from_rgba_unmultiplied(
                     [l.img.width() as usize, l.img.height() as usize],
                     l.img.as_raw(),
                 );
                 let tex = ctx.load_texture(files::file_name(&path), ci, TEX);
                 let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                let full = (l.full_w, l.full_h);
                 Entry {
                     tex,
                     img: Arc::new(l.img),
-                    full: (l.full_w, l.full_h),
+                    full,
                     file_size,
+                    // The file was just read, so this comes from memory, not the disk.
+                    info: Arc::new(info::read(&path, full, file_size)),
                 }
             });
+            // Browsed past before it was read: nothing to report (it was
+            // dropped from the cache, and is loaded again if you come back).
+            if matches!(&res, Err(e) if e == files::SKIPPED) {
+                return;
+            }
             let _ = tx.send(Msg::Loaded(path, res));
             ctx.request_repaint();
         });
@@ -445,7 +490,6 @@ impl App {
                                 self.edited_tex.remove(&src);
                                 self.cache.remove(&src);
                                 self.thumbs.remove(&src);
-                                self.info_cache.remove(&src);
                                 if self.fullres.as_ref().is_some_and(|f| f.0 == src) {
                                     self.fullres = None;
                                 }
@@ -637,9 +681,7 @@ impl App {
             return;
         };
         let base = if e.img.width().max(e.img.height()) > EDIT_MAX {
-            image::DynamicImage::ImageRgba8((*e.img).clone())
-                .thumbnail(EDIT_MAX, EDIT_MAX)
-                .into_rgba8()
+            files::shrink(image::DynamicImage::ImageRgba8((*e.img).clone()), EDIT_MAX).into_rgba8()
         } else {
             (*e.img).clone()
         };
@@ -1094,18 +1136,11 @@ impl App {
                 }
             });
         });
-        let (Some(path), Some(e)) = (self.current().cloned(), self.current_entry()) else {
+        let Some(e) = self.current_entry() else {
             ui.weak("Loading…");
             return;
         };
-        if self.info_cache.len() > 256 {
-            self.info_cache.clear();
-        }
-        let inf = self
-            .info_cache
-            .entry(path.clone())
-            .or_insert_with(|| Arc::new(info::read(&path, e.full, e.file_size)))
-            .clone();
+        let inf = e.info.clone();
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (title, rows) in &inf.sections {
                 ui.add_space(8.0);
@@ -1248,8 +1283,7 @@ impl App {
                                     let img = if edited {
                                         let out = edit::render(&l.img, &params);
                                         if out.width().max(out.height()) > max {
-                                            image::DynamicImage::ImageRgba8(out)
-                                                .thumbnail(max, max)
+                                            files::shrink(image::DynamicImage::ImageRgba8(out), max)
                                                 .into_rgba8()
                                         } else {
                                             out
@@ -2753,6 +2787,56 @@ impl App {
         // GLANCE_DEMO=zoom / zoomedit: jump to 100% after a second (zoomedit edits the
         // photo first), to check full-resolution loading.
         let mode = std::env::var("GLANCE_DEMO").unwrap_or_default();
+        // GLANCE_DEMO=browse (or browse-info, with the details panel open): step
+        // through the folder like a person pressing the arrow keys, and print how
+        // long each photo took to appear.
+        if mode == "browse" || mode == "browse-info" {
+            self.info_open |= mode == "browse-info";
+            ctx.request_repaint();
+            let ready = self.current_entry().is_some();
+            if let Some(last) = self.browse_log.last_mut()
+                && last.1.is_none()
+                && ready
+            {
+                last.1 = Some(last.0.elapsed().as_secs_f32());
+            }
+            // (direction, seconds to wait after the previous step)
+            let plan: Vec<(isize, f32)> = std::iter::repeat_n((1, 0.8), 12)
+                .chain(std::iter::repeat_n((-1, 0.8), 6))
+                .chain(std::iter::repeat_n((1, 0.3), 12))
+                .chain(std::iter::repeat_n((1, 1.5), 4))
+                .collect();
+            let i = self.browse_log.len();
+            let since = self
+                .browse_log
+                .last()
+                .map_or(self.demo.0.elapsed().as_secs_f32() - 2.0, |l| {
+                    l.0.elapsed().as_secs_f32()
+                });
+            if i < plan.len() {
+                if since >= plan[i].1 && (i > 0 || ready) {
+                    let n = self.files.len();
+                    let next = (self.idx as isize + plan[i].0).rem_euclid(n as isize) as usize;
+                    self.browse_log.push((Instant::now(), None));
+                    self.go(next);
+                }
+            } else if since > 3.0 {
+                for (k, (_, t)) in self.browse_log.iter().enumerate() {
+                    let pace = if plan[k].0 < 0 { "back" } else { "fwd " };
+                    eprintln!(
+                        "step {:2} {pace} every {:.1}s: {}",
+                        k + 1,
+                        plan[k].1,
+                        t.map_or("not shown before the next step".into(), |t| format!(
+                            "{:.2} s",
+                            t
+                        ))
+                    );
+                }
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            return;
+        }
         // GLANCE_DEMO=show:<screen>: open one screen and stay there, for
         // screenshots and checking dialogs (info, edit, print, prefs, queue).
         if let Some(what) = mode.strip_prefix("show:") {

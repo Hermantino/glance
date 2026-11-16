@@ -5,6 +5,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-16
+
+### Changed
+- Faster browsing, especially from an SD card: photos are shrunk to the display copy on all CPU cores (about 10× faster, and slightly more accurate), files are read one at a time so the photo you're looking at isn't slowed down by preloading, photos you've already browsed past are skipped instead of loaded, and preloading looks three photos ahead in the direction you're going.
+- Fujifilm RAF files read only their embedded preview (about 6 MB of a 45 MB file), so they open several times faster.
+- The details panel reads camera information in the background with the photo, so it no longer freezes glance briefly on slow storage.
+
 ## [0.1.2] - 2026-11-16
 
 ### Added
@@ -53,7 +60,8 @@ First public release.
 - Photo details panel: file facts plus camera, lens, exposure, date and location from EXIF, including RAW files.
 - RAW files show the camera's embedded preview; "Develop RAW…" opens them in an installed RAW developer.
 
-[Unreleased]: https://github.com/Hermantino/glance/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/Hermantino/glance/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/Hermantino/glance/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Hermantino/glance/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Hermantino/glance/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Hermantino/glance/releases/tag/v0.1.0
