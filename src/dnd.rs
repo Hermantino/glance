@@ -8,7 +8,7 @@
 //! `wl_data_source`. X11 isn't supported yet; [`Dnd::new`] returns `None` there.
 
 use std::io::Write;
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, OwnedFd};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -61,6 +61,9 @@ pub struct Dnd {
     shm: WlShm,
     manager: WlDataDeviceManager,
     device: WlDataDevice,
+    /// Writing to it wakes the event thread so it stops.
+    stop: OwnedFd,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Dnd {
@@ -74,8 +77,10 @@ impl Dnd {
         let (RawDisplayHandle::Wayland(d), RawWindowHandle::Wayland(w)) = (display, window) else {
             return None;
         };
-        // SAFETY: both pointers come from winit, whose display and window
-        // outlive the app (and so this struct and its thread).
+        // SAFETY: both pointers come from winit. The window and its display
+        // live until eframe has called `App::on_exit`, and glance drops this
+        // struct there; dropping it stops and joins the event thread, so
+        // neither outlives the display.
         let conn = Connection::from_backend(unsafe {
             Backend::from_foreign_display(d.display.as_ptr().cast())
         });
@@ -102,9 +107,10 @@ impl Dnd {
         };
         // Learn the seat's capabilities (and so get the pointer) before returning.
         queue.roundtrip(&mut state).ok()?;
-        std::thread::Builder::new()
+        let (stop_r, stop) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).ok()?;
+        let thread = std::thread::Builder::new()
             .name("glance-dnd".into())
-            .spawn(move || while queue.blocking_dispatch(&mut state).is_ok() {})
+            .spawn(move || run(queue, state, stop_r))
             .ok()?;
         Some(Self {
             conn,
@@ -115,6 +121,8 @@ impl Dnd {
             shm,
             manager,
             device,
+            stop,
+            thread: Some(thread),
         })
     }
 
@@ -196,6 +204,53 @@ impl Dnd {
         surface.damage(0, 0, i32::MAX, i32::MAX);
         surface.commit();
         Some((surface, buffer))
+    }
+}
+
+impl Drop for Dnd {
+    fn drop(&mut self) {
+        let _ = rustix::io::write(&self.stop, &[1]);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+/// The event thread: dispatches glance's queue until `stop` is readable or
+/// the connection breaks. Unlike `blocking_dispatch`, it can be woken to stop
+/// while winit's display still exists, so its objects are freed safely.
+fn run(mut queue: wayland_client::EventQueue<State>, mut state: State, stop: OwnedFd) {
+    use rustix::event::{PollFd, PollFlags, poll};
+    loop {
+        if queue.dispatch_pending(&mut state).is_err() || queue.flush().is_err() {
+            return;
+        }
+        let Some(guard) = queue.prepare_read() else {
+            continue; // events arrived meanwhile: dispatch them first
+        };
+        let (wayland, stopped) = {
+            let fd = guard.connection_fd();
+            let mut fds = [
+                PollFd::new(&fd, PollFlags::IN),
+                PollFd::new(&stop, PollFlags::IN),
+            ];
+            match poll(&mut fds, None) {
+                Ok(_) => (!fds[0].revents().is_empty(), !fds[1].revents().is_empty()),
+                Err(rustix::io::Errno::INTR) => (false, false),
+                Err(_) => return,
+            }
+        };
+        if stopped {
+            return; // dropping the guard cancels the read
+        }
+        if wayland {
+            match guard.read() {
+                Ok(_) => {}
+                Err(wayland_client::backend::WaylandError::Io(e))
+                    if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(_) => return,
+            }
+        }
     }
 }
 

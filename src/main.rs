@@ -3031,6 +3031,11 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn on_exit(&mut self) {
+        // Free glance's Wayland objects while winit's connection still exists.
+        self.dnd = None;
+    }
+
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
         // A drag out of the window ended: the button was released somewhere
         // else, so tell egui, or it would think it's still held.
