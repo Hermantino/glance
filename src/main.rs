@@ -1,5 +1,6 @@
 //! glance — a fast photo viewer: browse a folder, make quick fixes, print.
 mod config;
+mod dnd;
 mod edit;
 mod files;
 mod heic;
@@ -257,6 +258,11 @@ struct App {
     /// CUPS answers can take a second each, so they're fetched in the background and kept.
     printers: Option<(Vec<String>, Option<String>)>,
     printer_options: HashMap<String, (Vec<PpdOption>, String)>,
+    /// Drags the shown photo out of the window (Wayland only).
+    dnd: Option<dnd::Dnd>,
+    /// Where the drag out of the window started, to release egui's button there
+    /// once it ends (the compositor never sends glance that release).
+    dnd_from: Option<Pos2>,
 }
 
 impl App {
@@ -311,6 +317,14 @@ impl App {
             thumbs: HashMap::new(),
             printers: None,
             printer_options: HashMap::new(),
+            dnd: {
+                use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+                match (cc.display_handle(), cc.window_handle()) {
+                    (Ok(d), Ok(w)) => dnd::Dnd::new(d.as_raw(), w.as_raw(), &cc.egui_ctx),
+                    _ => None,
+                }
+            },
+            dnd_from: None,
         };
         app.go(idx);
         let (tx, ctx) = (app.tx.clone(), app.ctx.clone());
@@ -1218,6 +1232,33 @@ impl App {
         });
     }
 
+    /// Starts dragging the shown photo's file out of the window, if the press
+    /// was on the photo (`shown` is its size on screen, centred in `rect`).
+    fn drag_out(&mut self, path: &Path, e: &Entry, rect: Rect, shown: Vec2) {
+        let Some(dnd) = &self.dnd else { return };
+        let photo = Rect::from_center_size(rect.center(), shown);
+        let Some(from) = self.ctx.input(|i| i.pointer.press_origin()) else {
+            return;
+        };
+        if !photo.contains(from) {
+            return;
+        }
+        let ppp = self.ctx.pixels_per_point();
+        let scale = ppp.round().max(1.0);
+        let side = (160.0 * scale) as u32;
+        let k = (side as f32 / e.img.width().max(e.img.height()) as f32).min(1.0);
+        let (tw, th) = (
+            ((e.img.width() as f32 * k).round() as u32).max(1),
+            ((e.img.height() as f32 * k).round() as u32).max(1),
+        );
+        let thumb = image::imageops::thumbnail(&*e.img, tw, th);
+        let rel = (from - photo.min) / photo.size();
+        let hotspot = ((rel.x * tw as f32) as i32, (rel.y * th as f32) as i32);
+        if dnd.start(path, Some((thumb.as_raw(), tw, th)), hotspot, scale as i32) {
+            self.dnd_from = Some(from);
+        }
+    }
+
     fn view(&mut self, ui: &mut egui::Ui) {
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         let painter = ui.painter_at(rect);
@@ -1269,7 +1310,10 @@ impl App {
                         }
                     }
                 }
-                if resp.dragged() {
+                let fits = (self.zoom - 1.0).abs() < 0.01 && self.pan == Vec2::ZERO;
+                if fits && resp.drag_started() {
+                    self.drag_out(&path, &e, rect, size * fit);
+                } else if resp.dragged() && !fits && self.dnd_from.is_none() {
                     self.pan += resp.drag_delta();
                 }
                 if resp.double_clicked() {
@@ -2987,6 +3031,23 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // A drag out of the window ended: the button was released somewhere
+        // else, so tell egui, or it would think it's still held.
+        if let Some(dnd) = &self.dnd
+            && dnd.take_ended()
+            && let Some(pos) = self.dnd_from.take()
+        {
+            raw.events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            });
+            raw.events.push(egui::Event::PointerGone);
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.handle_messages();

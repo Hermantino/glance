@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- Drag the photo out of glance: drop it on a file manager to copy the file there, or on a terminal to type its path. Works when the photo fits the window (zoomed in, dragging still pans). Wayland only for now.
+
 ## [0.1.3] - 2026-11-16
 
 ### Changed

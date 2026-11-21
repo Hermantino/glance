@@ -40,7 +40,7 @@ glance isn't meant to become yet another image editor or photo library manager. 
 
 ## Features
 
-- **Browse**: open a photo, a folder, or nothing (the current folder); ←/→ go through every photo in the folder. Neighbouring photos are preloaded, so stepping through is instant. Wheel zoom, drag to pan, double-click for 1:1, fullscreen. Zooming in loads the full-resolution photo on demand, so you can check focus at true 100%; the status bar shows the zoom level and whether you're seeing full resolution, and clicking it offers Fit, 50%, 100% and 200%. Edited photos are shown at full resolution too, with the edits applied.
+- **Browse**: open a photo, a folder, or nothing (the current folder); ←/→ go through every photo in the folder. Neighbouring photos are preloaded, so stepping through is instant. Wheel zoom, drag to pan, double-click for 1:1, fullscreen. Drag the photo out of the window (when it fits) onto a file manager to copy it, or onto a terminal to type its path. Zooming in loads the full-resolution photo on demand, so you can check focus at true 100%; the status bar shows the zoom level and whether you're seeing full resolution, and clicking it offers Fit, 50%, 100% and 200%. Edited photos are shown at full resolution too, with the edits applied.
 - **Formats**: JPEG, PNG, TIFF, WebP, GIF, BMP, HEIC/HEIF/AVIF (including Fujifilm `.HIF`, via the system's libheif), and RAW files through their embedded preview.
 - **Edit**: crop with ratio presets (2:3 for 10×15 cm / 4×6″, 5:7, 4:5, A4, square…), free rotation up to ±45° in 0.1° steps (slider, or drag a knob next to a corner) plus 90° turns, rule-of-thirds guides, exposure and gamma. Undo and redo with Ctrl+Z / Ctrl+Shift+Z. Hold B to compare with the original. Edits are non-destructive until saved; saving makes a copy by default (overwrite, or overwrite with a backup, in Preferences).
 - **Print**: any CUPS printer or saved preset; paper size, feeder, paper type, ink levels, fill or fit, orientation, margins, copies, and a live preview with print size and dpi. The page is composed at the exact paper size and sent as a PDF with no CUPS scaling, so photos are never stretched. Remembers the options last used with each printer.
@@ -57,6 +57,7 @@ glance isn't meant to become yet another image editor or photo library manager. 
 - **Printing is tested on one printer**, an Epson ET-8500. Other printers should work through CUPS, but paper sizes and types may show raw driver names, and glance tells you when it doesn't recognise a paper size. Reports are very welcome ([#5](https://github.com/Hermantino/glance/issues/5)).
 - **Editing works in 8 bits per channel.** A 16-bit TIFF or PNG is saved as 8-bit.
 - **Edits last until you quit** unless you save them.
+- **Dragging a photo out of glance works on Wayland only**; X11 support is planned.
 - **"Overwrite, keep the original"** tells photos apart by when they were taken. If a different file with the same name and no capture date (a screenshot, a scan) replaces one that was already backed up, its original isn't backed up again. The default, saving a copy, never touches originals.
 - The ready-made download is for x86_64 only.
 

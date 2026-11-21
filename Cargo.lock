@@ -981,9 +981,13 @@ dependencies = [
  "kamadak-exif",
  "libloading 0.9.1",
  "natord",
+ "raw-window-handle",
  "rayon",
+ "rustix 1.1.6",
  "serde",
  "toml",
+ "wayland-backend",
+ "wayland-client",
 ]
 
 [[package]]
