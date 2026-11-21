@@ -24,7 +24,7 @@ body:
     id: version
     attributes:
       label: glance version
-      placeholder: "0.1.0 (or a commit)"
+      placeholder: "0.1.4 (from glance --version, or a commit)"
     validations:
       required: true
   - type: input

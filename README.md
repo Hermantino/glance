@@ -44,7 +44,7 @@ glance isn't meant to become yet another image editor or photo library manager. 
 - **Formats**: JPEG, PNG, TIFF, WebP, GIF, BMP, HEIC/HEIF/AVIF (including Fujifilm `.HIF`, via the system's libheif), and RAW files through their embedded preview.
 - **Edit**: crop with ratio presets (2:3 for 10×15 cm / 4×6″, 5:7, 4:5, A4, square…), free rotation up to ±45° in 0.1° steps (slider, or drag a knob next to a corner) plus 90° turns, rule-of-thirds guides, exposure and gamma. Undo and redo with Ctrl+Z / Ctrl+Shift+Z. Hold B to compare with the original. Edits are non-destructive until saved; saving makes a copy by default (overwrite, or overwrite with a backup, in Preferences).
 - **Print**: any CUPS printer or saved preset; paper size, feeder, paper type, ink levels, fill or fit, orientation, margins, copies, and a live preview with print size and dpi. The page is composed at the exact paper size and sent as a PDF with no CUPS scaling, so photos are never stretched. Remembers the options last used with each printer.
-- **Print queue**: mark photos with Space while browsing (say, a freshly filled SD card), then print them all in one go, one per sheet. Edits are kept per photo.
+- **Print queue**: mark photos with Space while browsing (say, a freshly filled SD card), then print them all in one go, one per sheet. Edits are kept per photo. With the queue panel open, the photo you're viewing is outlined in the list, which follows you as you browse.
 - **Details**: a side panel with file size, dimensions, camera, lens, focal length, aperture, shutter speed, ISO, date taken and location, read from EXIF (including RAW files from most cameras).
 - **Omarchy**: on [Omarchy](https://omarchy.org), glance follows your theme live (accent, background, corner style), like Omarchy's own apps. On other desktops it keeps its own amber look.
 - **RAW**: shows the camera's embedded JPEG preview, and "Develop RAW…" opens the file in an installed RAW developer (darktable, RapidRAW, RawTherapee, ART…). glance does not develop RAW files itself.
@@ -169,7 +169,7 @@ Unless you explicitly state otherwise, any contribution intentionally submitted 
 
 ## Acknowledgements
 
-- [egui / eframe](https://github.com/emilk/egui) for the UI, [image](https://github.com/image-rs/image) for decoding, [kamadak-exif](https://github.com/kamadak/exif-rs) for EXIF.
+- [egui / eframe](https://github.com/emilk/egui) for the UI, [image](https://github.com/image-rs/image) for decoding, [kamadak-exif](https://github.com/kamadak/exif-rs) for EXIF, [wayland-rs](https://github.com/Smithay/wayland-rs) for dragging photos out.
 - Fonts bundled by egui: Ubuntu (Ubuntu Font Licence), Hack (MIT and Bitstream Vera licence), Noto Emoji (OFL), emoji-icon-font (MIT).
 - Icons from [Phosphor Icons](https://phosphoricons.com/) (MIT, see [assets/Phosphor-LICENSE-MIT.txt](assets/Phosphor-LICENSE-MIT.txt)).
 - Screenshot photo: Ogawara, Japan, by the author.
