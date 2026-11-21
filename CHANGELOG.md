@@ -5,8 +5,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-21
+
 ### Added
 - Drag the photo out of glance: drop it on a file manager to copy the file there, or on a terminal to type its path. Works when the photo fits the window (zoomed in, dragging still pans). Wayland only for now.
+
+### Changed
+- Print queue: with the queue panel open, the photo you're viewing is outlined in the list, and the list scrolls to it as you browse.
 
 ## [0.1.3] - 2026-11-16
 
@@ -63,7 +68,8 @@ First public release.
 - Photo details panel: file facts plus camera, lens, exposure, date and location from EXIF, including RAW files.
 - RAW files show the camera's embedded preview; "Develop RAW…" opens them in an installed RAW developer.
 
-[Unreleased]: https://github.com/Hermantino/glance/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/Hermantino/glance/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/Hermantino/glance/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Hermantino/glance/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Hermantino/glance/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Hermantino/glance/compare/v0.1.0...v0.1.1
